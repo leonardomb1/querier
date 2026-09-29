@@ -12,9 +12,34 @@
 
   const session = $derived(ctl.conn.session);
   const info = $derived(ctl.conn.info);
-  const where = $derived(info.sandbox === "firecracker" ? "Sandbox" : "Local");
+  const vm = $derived(info.sandbox === "firecracker");
   const state = $derived(
-    { ready: "", starting: "Starting…", dead: "Stopped", offline: "Disconnected", none: "Idle" }[session as string] ?? "",
+    ctl.conn.stopped && session === "none"
+      ? "Stopped: unused for a while"
+      : ({ ready: "", starting: "Starting…", dead: "Stopped", offline: "Disconnected", none: "Not started" }[session as string] ?? ""),
+  );
+  const last = $derived(ctl.conn.metrics.points.at(-1));
+  // the kernel's state is the icon's: VS Code's way, no coloured lights
+  const kernelIcon = $derived(
+    session === "starting"
+      ? { name: "loading", spin: true }
+      : session === "offline"
+        ? { name: "debug-disconnect", spin: false }
+        : session !== "ready"
+          ? { name: "vm-outline", spin: false }
+          : ctl.busy
+            ? { name: vm ? "vm-running" : "server-process", spin: false }
+            : { name: vm ? "vm-active" : "server-process", spin: false },
+  );
+  const mb = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : `${Math.round(n / (1 << 20))} MB`);
+  const tooltip = $derived(
+    [
+      `Sandbox: ${vm ? "Firecracker microVM" : "local process"}${state ? ` · ${state}` : ctl.busy ? " · running a cell" : " · idle"}`,
+      session === "ready" && last ? `CPU ${last.cpu == null ? "—" : `${Math.round(last.cpu * 100)}%`} · memory ${mb(last.mem)} of ${mb(last.memTotal)}` : "",
+      "Click for usage, the kernel and its settings",
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
   const errors = $derived(ctl.problems.filter((p) => p.severity !== "warning").length + (tpl.built?.error || tpl.frameError ? 1 : 0));
   const warnings = $derived(ctl.problems.filter((p) => p.severity === "warning").length);
@@ -24,19 +49,11 @@
   const version = $derived([info.python && `Python ${info.python}`, info.basalt && `basalt ${info.basalt}`].filter(Boolean).join(" · "));
 </script>
 
-<footer class="status">
+<footer class="status" style:view-transition-name="wb-status">
   <div class="left">
-    <Menu
-      label={`${where}${state ? ` · ${state}` : ""}`}
-      title={`${info.sandbox === "firecracker" ? "The kernel runs in a Firecracker microVM" : "The kernel runs as a local process"}${version ? ` (${version})` : ""}${info.egress ? `; it may reach ${info.egress}` : ""}`}
-      items={[
-        { label: "Restart the kernel", run: () => ctl.restart() },
-        { label: "Stop what is running", run: () => ctl.interrupt(), disabled: !ctl.busy },
-        "-",
-        { label: "Sandbox: size and network", run: () => (ctl.sandbox = true) },
-        { label: "Secrets", run: () => (ctl.secrets = true) },
-      ]}
-    />
+    <button class="sandbox" class:open={ctl.sandboxPanel} title={tooltip} aria-label="Sandbox: {state || 'running'}" onclick={() => (ctl.sandboxPanel = !ctl.sandboxPanel)}>
+      <span class="kicon" class:off={session !== "ready" && session !== "starting"}><Icon name={kernelIcon.name} size={15} spin={kernelIcon.spin} /></span>
+    </button>
     {#if ctl.git?.tracked}
       <button title="Source control{changes ? `: ${changes} change${changes === 1 ? "" : "s"}` : ""}" onclick={() => (wb.view = "scm")}>
         <Icon name="git-branch" size={14} />{ctl.git.branch ?? "detached"}{#if changes}<span>{changes}</span>{/if}
@@ -46,17 +63,22 @@
       <Icon name="error" size={14} />{errors}
       <Icon name="warning" size={14} />{warnings}
     </button>
-    {#if running}
+    {#if running && ctl.mayRun}
       <button title="Stop" onclick={() => ctl.interrupt()}>
         <Icon name="loading" size={14} spin />Running {running}{queued ? ` (+${queued})` : ""}
       </button>
-    {:else if ctl.staleCount}
+    {:else if running}
+      <span><Icon name="loading" size={14} spin />Running {running}{queued ? ` (+${queued})` : ""}</span>
+    {:else if ctl.staleCount && ctl.mayRun}
       <button title="Run the outdated cells, and what they need" onclick={() => ctl.runStale()}>
         <Icon name="run-errors" size={14} />{ctl.staleCount} outdated
       </button>
     {/if}
-    {#if ctl.conn.secretsStale}
-      <button class="warn" title="The kernel still has the old values: restart it" onclick={() => ctl.restart()}>Secrets changed · Restart</button>
+    {#if ctl.conn.envStale && ctl.mayRun}
+      <button class="warn" title="The kernel still has the previous packages: restart it" onclick={() => ctl.restart()}>Environment changed · Restart</button>
+    {/if}
+    {#if ctl.conn.secretsStale && ctl.mayRun}
+      <button class="warn" title="The kernel still has the old credentials: restart it" onclick={() => ctl.restart()}>Credentials changed · Restart</button>
     {/if}
   </div>
   <div class="right">
@@ -90,6 +112,7 @@
   }
   .status button,
   .status :global(button.text),
+  .left > span,
   .right span {
     display: inline-flex;
     align-items: center;
@@ -105,10 +128,20 @@
   .status :global(button.text:hover) {
     background: var(--wb-list-hover);
   }
+  /* a click is felt: the item darkens as it is pressed */
   .status button:active {
     transform: none;
+    background: var(--wb-list-active);
+    transition-duration: 0s;
   }
-  .warn {
-    color: var(--stale) !important;
+  .sandbox.open {
+    background: var(--wb-list-active);
+  }
+  .kicon {
+    position: relative;
+    display: inline-flex;
+  }
+  .kicon.off {
+    color: var(--wb-fg-muted);
   }
 </style>

@@ -3,10 +3,11 @@
 A minimal BI notebook on [basalt](../basalt): SQL and Python cells over one
 shared set of tables.
 
-A notebook is a folder. Cells run in filename order and are named by it:
+A notebook is a folder, in a workspace folder. Cells run in filename order and
+are named by it:
 
 ```
-notebooks/demo/
+notebooks/default/demo/
   01_sales.sql       result is the table `sales`
   02_enrich.py       sees `sales` as a polars DataFrame; its last expression is `enrich`
   03_by_region.sql   SELECT ... FROM enrich — any DataFrame is a table to basalt
@@ -14,6 +15,15 @@ notebooks/demo/
   05_plot.py         matplotlib figures come back as PNGs
   notebook.json      { "title": ..., "description": ... }  (optional)
 ```
+
+A **workspace** is a folder of notebooks with settings they share
+(`workspace.json` and the server's config): connections, sandbox defaults (vCPUs and
+memory, unless a notebook sets its own; allowed destinations add to a notebook's),
+the AI clients' default access, and attributes: key/value tags (team, cost center,
+classification) that access policies read. A notebook's id is
+`workspace/notebook`, its address `#/w/<workspace>/nb/<notebook>`. Notebooks from
+before workspaces move into `default/` when the server starts, with their AI
+access; old `#/nb/<name>` links still open them.
 
 SQL runs in one `basalt kernel` per session, so a `CREATE CONNECTION`, `PARAM`
 or `LET` in one cell holds for every later cell.
@@ -23,9 +33,16 @@ uv venv .venv && uv pip install --python .venv/bin/python polars matplotlib
 bun install
 bun run build && bun run start     # http://localhost:3000
 bun run dev                        # API on :3000 + Vite on :5173 with hot reload
-bun scripts/run-notebook.ts notebooks/demo -p days=7   # headless
+bun scripts/run-notebook.ts notebooks/default/demo -p days=7   # headless
 bun test && bun run check
 ```
+
+Home is the same workbench as a notebook, so moving between them keeps the title,
+activity and status bars in place: a Workspaces tree in the side bar (new
+workspaces and notebooks, and renames, typed in place, `F2` renames; drag a
+notebook onto a workspace to move it), a Welcome tab with recent notebooks, and
+per workspace an overview of its notebooks and a settings editor laid out as VS
+Code's.
 
 The notebook opens in a workbench laid out as VS Code's (and with its icons,
 [Codicons](https://github.com/microsoft/vscode-codicons), CC BY 4.0): an activity bar
@@ -117,13 +134,45 @@ which keeps it in the notebook folder (paths are checked to stay inside `output/
 files over 2 GB stay in the sandbox). Anything else a cell writes vanishes with its
 microVM. `output/` is kept out of git, and its files list in the sidebar.
 
-**Secrets** (palette → "Secrets", or the sidebar) become environment variables of
-the notebook's kernel, so no cell holds a password: a connection named `sr` reads
-`SR_USER`/`SR_PASS` by basalt's convention, `token = env('GH_TOKEN')` works in a
-connection's options, and Python reads `os.environ`. They are set for one notebook
-or for all, stored in `~/.config/querier/secrets.json` (mode 600, never in a
-notebook folder, never sent back to the browser), and masked in cell output. A
-literal `password = '…'` in a cell is flagged in the editor.
+**Kernels are each person's own**, as in Microsoft Fabric: two people on one
+notebook run in two kernels (two microVMs), so what one runs and sees never
+reaches the other, and each runs with what they may use. A kernel unused for
+`QUERIER_KERNEL_IDLE_MINUTES` (default 30) stops and its tabs are told why;
+`QUERIER_MAX_KERNELS` (default: what the host's memory holds) and
+`QUERIER_MAX_KERNELS_PER_USER` (default 3) cap how many run, and a run over a cap
+says which.
+
+**Connections** give kernels their credentials, so no cell holds a password. A
+connection is a named set of environment variables: one named `sr` gives
+`SR_USER`/`SR_PASS`, which basalt's `CREATE CONNECTION sr` reads by itself;
+`token = env('GH_TOKEN')` works in a connection's options; Python reads
+`os.environ`. A connection is a workspace's (its settings → Connections) or
+everyone's (User settings → Connections), and its credentials are **shared** (set
+once by who manages it) or **each person's own** (everyone enters theirs, in User
+settings or when a notebook asks; a kernel runs with its owner's). Who may use one
+is policy: a workspace's Contributors use its connections and its Members manage
+them, and a connection has its own roles (User, Owner) for anyone else; a kernel
+gets exactly the connections its owner may use. Values are stored in
+`<config>/connections.json` (mode 600, never in a notebook folder, never sent back
+to the browser) and masked in cell output. A literal `password = '…'` in a cell is
+flagged in the editor.
+
+**Publishing a report** (the report's toolbar → Publish, for who may share the
+notebook) gives it to its viewers, everyone with `report.view` (a workspace's
+Viewers, a Read share, a policy), at `#/w/<ws>/nb/<nb>/view`: the report alone,
+no code, run on the server in each viewer's own report kernel. Publishing freezes
+the code as it is: later edits reach viewers when it is published again (the
+report says when the notebook changed since). It runs **as each viewer**, with
+their own connections, or **as its owner**, with the publisher's connections
+(only they can choose that; viewers never see the credentials, and it runs only
+the code they published). A PARAM can be **bound** to a tag of the viewer's
+(`region` from their directory `region`): the server sets it on every run, the
+viewer can't, and a viewer without the tag can't run it, so each sees their own
+rows. A report run as its owner with nothing bound can be **scheduled** (every 15
+minutes to daily): the server runs it as the owner and viewers open it already
+run, without a kernel of their own until they change a control. Viewers' runs
+write nothing back to the notebook's folder. Publishing, unpublishing and each
+scheduled run are in the audit log.
 
 **Git**: each notebook can be its own repository; opening an untracked notebook
 offers to start. The sidebar's Changes tab shows what changed per cell (a
@@ -132,8 +181,9 @@ and creates branches, and pulls (fast-forward, or rebase; a conflict is undone
 and reported) and pushes. History shows each commit cell by cell, side by side,
 and restores a cell or the whole notebook as uncommitted changes. Editors mark
 changed lines in the gutter and show an inline diff on demand. Outputs are never
-committed; `.gitignore` leaves columnar data out. HTTPS remotes sign in with a
-`GIT_TOKEN` secret, SSH with the server's keys.
+committed; `.gitignore` leaves columnar data out. HTTPS remotes sign in with
+`GIT_TOKEN` from a connection the person pulling or pushing may use, SSH with the
+server's keys.
 
 **AI clients (MCP)**: Claude Code, Claude Desktop or any MCP client can work with
 notebooks at `/mcp` (Streamable HTTP). Palette → "AI clients and access" makes a
@@ -143,8 +193,9 @@ client token (shown once, stored hashed) and gives the command to paste:
 claude mcp add --transport http querier http://localhost:3000/mcp --header "Authorization: Bearer qk_…"
 ```
 
-Each notebook has an access level, kept on the server (`mcp.json` next to
-`secrets.json`, never in the notebook folder, so a pulled repo can't raise its own):
+Each notebook has an access level, its own or else its workspace's default (set in
+the workspace's settings), kept on the server (`<config>/mcp.json`, never in the
+notebook folder, so a pulled repo can't raise its own):
 **off**; **read** (the default: code, dependencies, schemas, errors, no rows);
 **run** (runs cells and scratch queries, sees results and images); **edit**
 (writes, renames, moves and deletes cells, lays out the report). Tools:
@@ -154,9 +205,41 @@ Each notebook has an access level, kept on the server (`mcp.json` next to
 first, as the Run button), `run_query`, `write_cell`, `rename_cell`,
 `edit_cell` (exact find-and-replace, all or nothing), `move_cell`, `delete_cell`,
 `set_report`. Runs and edits go through the same
-paths as the UI, so open tabs show them; kernels get secrets as environment
-variables and output is masked, so secret values never reach a client. Requests
+paths as the UI, so open tabs show them; a token acts as its owner, in their own
+kernel with their connections, and output is masked, so credentials never reach a client. Requests
 from a browser page on another origin are refused.
+
+## Signing in
+
+Every page, API call, kernel socket and AI token needs a signed-in person.
+
+- **The sysadmin**, from `.env` (copy `.env.example`): `QUERIER_ADMIN_USER`, plus `QUERIER_ADMIN_PASSWORD_HASH` as printed by `bun server/auth/hash.ts`.
+  - It works even when the directory is down, and Querier refuses to start without it.
+  - `compose.yaml` loads `.env` into the container.
+- **Directories and single sign-on:** Administration → Sign-in adds and edits them (presets for Active Directory, OpenLDAP, Entra ID, Keycloak and any OpenID Connect provider), orders the sign-in page, and tries the settings before saving: the directory reached and a person looked up by name without their password (their groups and mapped attributes shown), or the issuer's discovery read and the redirect URI to register. Also session lifetimes. It is all kept in `<config>/auth.json` (mode 600; `auth.example.json` has examples), which can be edited by hand too. A secret there may be `"env:NAME"`, read from `.env`; a stored one is never sent back to the page.
+  - **LDAP / Active Directory:** `{ "id": "corp", "type": "ldap", "label": "Corporate AD", "url": "ldaps://dc.corp:636", "caFile": "/data/config/ca.pem", "bindDn": "CN=svc-querier,…", "bindPassword": "env:LDAP_BIND_PASSWORD", "baseDn": "DC=corp,DC=local", "groupBaseDn": "DC=corp,DC=local", "attributes": { "department": "department", "title": "title" } }`
+    - Querier searches with the service account, then binds as the person.
+    - It uses LDAPS or StartTLS only.
+    - Nested AD groups are resolved, and disabled accounts are refused.
+  - **OIDC (Microsoft Entra ID, Keycloak, …):** `{ "id": "entra", "type": "oidc", "label": "Microsoft", "issuer": "https://login.microsoftonline.com/<tenant>/v2.0", "clientId": "…", "clientSecret": "env:ENTRA_CLIENT_SECRET", "attributes": { "department": "department" }, "entraGraphOverage": true }`
+    - It uses the authorization code flow with PKCE.
+    - The redirect URI is `<QUERIER_PUBLIC_URL>/api/auth/oidc/<id>/callback`.
+    - `entraGraphOverage` reads a user's groups from Microsoft Graph when there are too many for the token, which needs `GroupMember.Read.All`.
+- **Sessions:** an HttpOnly cookie. The person's groups and attributes are refreshed from their provider every 15 minutes, and a disabled account's session ends.
+- **Passwords over plain HTTP** are refused except on localhost: set `QUERIER_PUBLIC_URL` to the `https://` address.
+- **Audit:** every sign-in, denial and change is logged in `<config>/querier.db`.
+- **Access** is decided by one policy engine ([Cedar](https://www.cedarpolicy.com)) on every request, socket message and AI tool call:
+  - **Roles and shares, as in Microsoft Fabric**, given in Manage access to a person, a directory group, everyone, or everyone whose attributes match a condition (`principal.getTag("department").contains("Finance")`): a workspace's Viewer, Contributor, Member or Admin; a notebook's Read, Run, Edit or Reshare; a connection's User or Owner.
+  - **Policy files** (Administration → Policies, or `<config>/policies/*.cedar`, git-able): rules roles can't say, over people's directory attributes and workspaces' and notebooks' tags. Checked as they are typed; a file with errors isn't saved, a set that doesn't load keeps the last valid one in force, and a policy that errors counts as a denial. A `forbid` wins over any `permit`.
+  - **Administration** (the sysadmin, or whoever a policy gives `admin.manage`; the gear menu): the policy files; **explain a decision** (may this person do this to that, and which policies decided it); **people** (their groups and attributes as policies see them, and what they may do where); and the **audit log** (sign-ins, denials, grants, policy and connection changes), filtered and paged.
+  - People who sign in see nothing until something gives them access. **Who may sign in at all** can be narrowed (Administration → Sign-in → Who may sign in, or any policy forbidding `signIn`): by group, directory attribute or provider. Someone who stops matching is signed out at their next request; the system administrator always may.
+- **AI tokens** act as the person who made them. Tokens made before accounts existed now belong to the sysadmin.
+  - Renaming `QUERIER_ADMIN_USER` makes those tokens someone else's: make new ones.
+  - Changing the sysadmin's name or password ends its open sessions.
+- **Behind a reverse proxy that ends TLS:**
+  - set `QUERIER_PUBLIC_URL`; requests from that origin count as Querier's own;
+  - set `QUERIER_TRUSTED_PROXIES` to the proxy's address, so the audit log and login throttling see the real client address;
+  - an OIDC sign-in must finish in the browser that started it.
 
 ## Running it sandboxed (Docker + Firecracker)
 
@@ -170,7 +253,7 @@ the image (nothing is installed on the host):
 - The VM boots a read-only root disk (Python 3.13, polars, altair, great_tables,
   matplotlib, basalt) and a read-only copy of the notebook's files, with a
   throwaway layer on top: nothing it writes comes back.
-- Secrets reach it over vsock when the session starts, and are never on a disk.
+- Credentials reach it over vsock when the session starts, and are never on a disk.
 - Firecracker runs as an unprivileged user under its own seccomp filter; the
   container holds only `NET_ADMIN SETUID SETGID CHOWN KILL`, `/dev/kvm` and
   `/dev/net/tun`, with no-new-privileges.
@@ -182,7 +265,7 @@ the image (nothing is installed on the host):
 
 `bun scripts/vm-smoke.ts`, run inside the image, boots a VM and checks all of it.
 
-`BASALT_BIN`, `QUERIER_PYTHON`, `QUERIER_SECRETS` and `QUERIER_MAX_ROWS` (default 1,000,000; a SQL
+`BASALT_BIN`, `QUERIER_PYTHON`, `QUERIER_CONFIG_DIR` and `QUERIER_MAX_ROWS` (default 1,000,000; a SQL
 result is cut there) override the defaults.
 
 ## Layout
@@ -201,4 +284,4 @@ result is cut there) override the defaults.
   staleness and run plans.
 - `server/mcp/`: the MCP server for AI clients (tools, access levels, tokens).
 - `server/app.ts` serves REST for files, a WebSocket per notebook, `/mcp`, and the built UI.
-- `web/` is the Svelte 5 UI: CodeMirror editor, virtualized Arrow table.
+- `web/` is the Svelte 5 UI: Monaco (VS Code's editor) with Shiki's TextMate grammars for the code (Svelte, Python, Markdown, and basalt's own in `lib/basalt-grammar.ts`), a virtualized Arrow table.

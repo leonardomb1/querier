@@ -1,10 +1,8 @@
 // What the editor knows about basalt SQL without asking the kernel: its words
-// for highlighting, and its functions with signatures and a line of docs
-// (from basalt's language.md) for completion, hover and parameter hints.
+// for highlighting (basalt-grammar.ts), and its functions with signatures and a
+// line of docs (from basalt's language.md) for completion, hover and parameter hints.
 
-import { SQLDialect } from "@codemirror/lang-sql";
-
-const KEYWORDS = `select from where group by order having limit offset as and or not in is null like between case when then else end
+const KEYWORD_TEXT = `select from where group by order having limit offset as and or not in is null like between case when then else end
 join inner left right full cross semi anti on using with distinct union all asc desc nulls first last over partition rows range
 preceding following current row unbounded exists true false cast try_cast load into append replace upsert partial cols split jobs
 param let throw create connection function resource options type default body header endpoint doc accept buffer at segment
@@ -12,7 +10,7 @@ retain until loaded hours flush every seconds explain analyze describe show tabl
 stop error call return pushdown paginate page cursor retry except exclude rename anchor schema identifier query http get post
 unnest empty interval`;
 
-const TYPES = "bool boolean int integer bigint smallint float double real decimal numeric string text varchar char bytes date time timestamp datetime json";
+const TYPE_TEXT = "bool boolean int integer bigint smallint float double real decimal numeric string text varchar char bytes date time timestamp datetime json";
 
 export interface FnDoc {
   name: string;
@@ -112,12 +110,30 @@ export const fnDoc = (name: string) => byName.get(name.toLowerCase());
 
 export const signature = (fn: FnDoc) => `${fn.name}(${fn.params.join(", ")})${fn.returns ? ` → ${fn.returns}` : ""}`;
 
-export const basaltDialect = SQLDialect.define({
-  keywords: KEYWORDS.replace(/\s+/g, " "),
-  types: TYPES,
-  builtin: FUNCTIONS.map((fn) => fn.name).join(" "),
-  identifierQuotes: '"',
-  doubleDollarQuotedStrings: true,
-  specialVar: "$",
-  operatorChars: "*+-%<>!=&|~^/?",
-});
+export const KEYWORDS = KEYWORD_TEXT.split(/\s+/).filter(Boolean);
+export const TYPES = TYPE_TEXT.split(/\s+/).filter(Boolean);
+
+/** The basalt function call `pos` is inside, which argument it is at, and where its name starts. */
+export function callAt(text: string, pos: number): { fn: FnDoc; arg: number; at: number } | null {
+  const from = Math.max(0, pos - 2000);
+  const before = text.slice(from, pos);
+  let depth = 0;
+  let arg = 0;
+  let quote = false;
+  for (let i = before.length - 1; i >= 0; i--) {
+    const c = before[i];
+    if (c === "'") quote = !quote;
+    if (quote) continue;
+    if (c === ";") return null;
+    if (c === ")") depth++;
+    else if (c === "(") {
+      if (depth === 0) {
+        const m = /([A-Za-z_]\w*)\s*$/.exec(before.slice(0, i));
+        const fn = m && fnDoc(m[1]);
+        return fn ? { fn, arg, at: from + i - m[0].length } : null;
+      }
+      depth--;
+    } else if (c === "," && depth === 0) arg++;
+  }
+  return null;
+}

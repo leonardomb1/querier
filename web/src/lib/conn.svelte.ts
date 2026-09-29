@@ -2,6 +2,8 @@
 // each cell's run state and outputs. Frames match server/runner/protocol.ts.
 
 import type { Deps, Ran } from "../../../shared/graph";
+import { homeHref, nbHref, viewHref, wsHref } from "./href";
+import { loginHref } from "./api";
 
 export type CellState = "idle" | "queued" | "running" | "ok" | "error";
 
@@ -84,6 +86,15 @@ export interface Completion {
   items: { text: string; kind: string; detail?: string }[];
 }
 
+/** What the kernel uses at one moment (server/metrics.ts): CPU as a share, memory in bytes. */
+export interface MetricPoint {
+  t: number;
+  cpu: number | null;
+  mem: number;
+  memTotal: number;
+  rss: Record<string, number>;
+}
+
 function decode(buf: ArrayBuffer): { meta: any; data: Uint8Array } {
   const view = new DataView(buf);
   const n = view.getUint32(0);
@@ -96,13 +107,22 @@ export class NotebookConn {
   runs = $state<Record<string, CellRun>>({});
   session = $state<"none" | "starting" | "ready" | "dead" | "offline">("offline");
   info = $state<Record<string, string>>({});
-  /** Secrets changed after the kernel started; it has the old ones until a restart. */
+  /** Its connections (or who may use them) changed after the kernel started; it has the old credentials until a restart. */
   secretsStale = $state(false);
+  /** Its environment's packages changed after the kernel started; it has the old ones until a restart. */
+  envStale = $state(false);
   tables = $state<TableInfo[]>([]);
   declared = $state<{ kind: string; name: string }[]>([]);
   deps = $state<Record<string, Deps>>({});
+  /** The kernel's CPU and memory, a point every 2 s (15 minutes kept by the server);
+   *  "vm": the microVM's own numbers, "process": a local kernel's, on the host */
+  metrics = $state<{ scope: "vm" | "process"; points: MetricPoint[] }>({ scope: "process", points: [] });
   /** The server has replayed this notebook's state: runs, stamps, deps. */
   synced = $state(false);
+  /** Why the kernel stopped, when the server stopped it (unused too long): shown until one starts. */
+  stopped = $state("");
+  /** Something the page should say: a request refused (no permission), the kernel stopped. */
+  onnotice?: (message: string) => void;
   /** Sent before the socket opened; delivered when it does. */
   private outbox: string[] = [];
 
@@ -115,13 +135,15 @@ export class NotebookConn {
   constructor(
     private nb: string,
     private onNotebookChanged: () => void,
+    /** a published report's viewer: their report kernel, not the notebook's */
+    private report = false,
   ) {
     this.connect();
   }
 
   private connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.nb)}`);
+    const ws = new WebSocket(`${proto}://${location.host}/ws/${this.nb.split("/").map(encodeURIComponent).join("/")}${this.report ? "/report" : ""}`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       this.retry = 0;
@@ -129,9 +151,21 @@ export class NotebookConn {
       for (const m of this.outbox.splice(0)) ws.send(m);
     };
     ws.onmessage = (e) => this.handle(decode(e.data));
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       this.session = "offline";
       this.synced = false;
+      // the session ended (signed out, expired, the account disabled): sign in again, then back here
+      // the report isn't published any more: nothing to reconnect to
+      if (e.code === 4404) {
+        this.closed = true;
+        this.onnotice?.("This report isn't published any more.");
+        return;
+      }
+      if (e.code === 4401) {
+        this.closed = true;
+        location.hash = loginHref(location.hash);
+        return;
+      }
       if (!this.closed) setTimeout(() => this.connect(), Math.min(5000, 250 * 2 ** this.retry++));
     };
     this.ws = ws;
@@ -145,9 +179,21 @@ export class NotebookConn {
     switch (meta.type) {
       case "session":
         this.session = meta.state;
+        if (meta.stopped) this.onnotice?.(meta.stopped);
+        this.stopped = meta.stopped ?? (meta.state === "none" ? this.stopped : "");
         this.info = meta.info ?? {};
         this.secretsStale = !!meta.secretsStale;
+        this.envStale = !!meta.envStale;
         break;
+      case "metrics-history":
+        this.metrics = { scope: meta.scope, points: meta.points };
+        break;
+      case "metrics": {
+        const points = [...this.metrics.points, meta.point];
+        if (points.length > 450) points.splice(0, points.length - 450);
+        this.metrics = { scope: meta.scope, points };
+        break;
+      }
       case "state": {
         const r = this.run(meta.cell);
         r.state = meta.state;
@@ -197,6 +243,18 @@ export class NotebookConn {
         break;
       case "notebook":
         this.onNotebookChanged();
+        break;
+      // (a completion, a check, a table's rows: answered empty where they were asked)
+      case "denied":
+        if (!["complete", "check", "inspect", "filter"].includes(meta.op)) this.onnotice?.(meta.message);
+        break;
+      // renamed or deleted, here or in another tab: follow it, or go back to the list
+      case "moved":
+        location.hash = this.report ? viewHref(meta.to) : nbHref(meta.to);
+        break;
+      // its workspace, unless that went too
+      case "gone":
+        location.hash = meta.workspace ? homeHref() : wsHref(this.nb.split("/")[0]);
         break;
     }
   }

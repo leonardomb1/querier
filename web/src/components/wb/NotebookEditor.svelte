@@ -12,7 +12,7 @@
   const book = $derived(ctl.book);
 
   $effect(() => {
-    wb.actions.notebook = [
+    wb.actions.notebook = !ctl.mayRun ? [] : [
       ...(ctl.staleCount && !ctl.busy ? [{ icon: "run-errors", title: `Run the ${ctl.staleCount} outdated cells`, run: () => ctl.runStale() }] : []),
       ctl.busy
         ? { icon: "debug-stop", title: "Stop  (i i)", run: () => ctl.interrupt() }
@@ -26,7 +26,7 @@
   let chordAt = 0;
   function typing(e: KeyboardEvent) {
     const t = e.target as HTMLElement;
-    return t.closest("input, textarea, select, [contenteditable=true], .cm-editor, [role=grid], [role=dialog]") != null;
+    return t.closest("input, textarea, select, [contenteditable=true], .monaco-editor, [role=grid], [role=dialog]") != null;
   }
   function stop(e: KeyboardEvent, fn: () => unknown) {
     e.preventDefault();
@@ -126,6 +126,30 @@
       <p class="error"><Icon name="error" size={14} />{ctl.error}<button class="icon" aria-label="Dismiss" onclick={() => (ctl.error = "")}><Icon name="x" size={14} /></button></p>
     {/if}
 
+    {#if ctl.mayRun}
+      {#each ctl.needsCredentials as c (c.id)}
+        <p class="access creds">
+          <Icon name="key" size={14} />
+          <span>This notebook reads <code>{c.variables.filter((v) => ctl.secretRefs.has(v)).join(", ")}</code> from {c.name}, which takes your own credentials. You haven't entered them.</span>
+          <button class="btn" onclick={() => (ctl.enteringCredentials = c)}>Enter them…</button>
+        </p>
+      {/each}
+    {/if}
+    {#if book && (book.codeHidden || !ctl.mayRun || !ctl.mayEdit)}
+      <p class="access">
+        <Icon name="lock" size={14} />
+        {#if book.codeHidden}
+          You may see this notebook's notes, not its code.
+        {:else if !ctl.mayRun && !ctl.mayEdit}
+          Read only: you may view this notebook, not run or change it.
+        {:else if !ctl.mayEdit}
+          You may run this notebook, not change it.
+        {:else}
+          You may change this notebook, not run it.
+        {/if}
+      </p>
+    {/if}
+
     {#if book}
       <div class="cells">
         {@render adder(null)}
@@ -139,11 +163,15 @@
 </div>
 
 {#snippet adder(after: string | null)}
-  <div class="adder" class:always={book?.cells.length === 0}>
-    <button onclick={() => ctl.add("sql", after)}><Icon name="add" size={13} />SQL</button>
-    <button onclick={() => ctl.add("python", after)}><Icon name="add" size={13} />Python</button>
-    <button onclick={() => ctl.add("md", after)}><Icon name="add" size={13} />Markdown</button>
-  </div>
+  {#if ctl.mayEdit}
+    <div class="adder" class:always={book?.cells.length === 0}>
+      <button onclick={() => ctl.add("sql", after)}><Icon name="add" size={13} />SQL</button>
+      <button onclick={() => ctl.add("python", after)}><Icon name="add" size={13} />Python</button>
+      <button onclick={() => ctl.add("md", after)}><Icon name="add" size={13} />Markdown</button>
+    </div>
+  {:else}
+    <div class="gap"></div>
+  {/if}
 {/snippet}
 
 <style>
@@ -185,6 +213,45 @@
   .notice a {
     margin-left: 0.5rem;
     color: var(--wb-accent);
+  }
+  .access {
+    display: flex;
+    align-items: center;
+    gap: 0.4375rem;
+    margin: 0 0 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--wb-fg-muted);
+  }
+  .gap {
+    height: 0.75rem;
+  }
+  .creds {
+    padding: 0.4375rem 0.625rem;
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--wb-border));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--warning) 6%, transparent);
+  }
+  .creds :global(i) {
+    flex: none;
+    color: var(--warning);
+  }
+  .creds span {
+    flex: 1;
+  }
+  .creds code {
+    font-size: 0.75rem;
+  }
+  .creds .btn {
+    flex: none;
+    height: 1.5rem;
+    padding: 0 0.625rem;
+    font-size: 0.78rem;
+    color: var(--wb-fg);
+    border: 1px solid var(--wb-input-border);
+    border-radius: 3px;
+  }
+  .creds .btn:hover {
+    background: var(--wb-list-hover);
   }
   .error {
     display: flex;

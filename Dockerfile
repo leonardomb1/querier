@@ -2,7 +2,7 @@
 #   docker build -t querier .
 #   docker compose up        (see compose.yaml for the devices and capabilities it needs)
 
-ARG BASALT_VERSION=v0.8.7
+ARG BASALT_VERSION=v0.8.9
 ARG FIRECRACKER_VERSION=v1.17.0
 ARG GUEST_KERNEL=firecracker-ci/v1.15/x86_64/vmlinux-6.1.155
 
@@ -20,7 +20,7 @@ RUN cd /usr/local/bin && echo "$(cut -d' ' -f1 /tmp/basalt.sha256)  basalt" | sh
 COPY kernel/kernel.py kernel/sqlrefs.py /opt/querier/
 COPY --chmod=755 kernel/init.py /sbin/querier-init
 # mount points the init uses on the read-only root
-RUN mkdir -p /notebook /mnt/notebook-ro && python3 -m compileall -q /opt/querier /usr/local/lib/python3.13
+RUN mkdir -p /notebook /mnt/notebook-ro /mnt/env-ws /mnt/env-nb && python3 -m compileall -q /opt/querier /usr/local/lib/python3.13
 
 # the root disk, made from the guest's files (read-only in the VM)
 FROM debian:bookworm-slim AS guest-disk
@@ -56,6 +56,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && firecracker --version | head -1 \
  && useradd --system --no-create-home --shell /usr/sbin/nologin fc
 COPY --from=guest-disk /rootfs.ext4 /vmlinux /opt/querier/vm/
+# workspaces' Python environments are locked and installed on the server (never in a sandbox)
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /usr/local/bin/uv
 # for AI clients (MCP): `basalt check` validates SQL on the server, and the
 # language reference of the same release answers basalt_reference
 COPY --from=guest /usr/local/bin/basalt /usr/local/bin/basalt
@@ -73,7 +75,8 @@ COPY web/src web/src
 ENV QUERIER_RUNNER=firecracker \
     QUERIER_PYTHON=/usr/bin/python3 \
     QUERIER_NOTEBOOKS=/data/notebooks \
-    QUERIER_SECRETS=/data/config/secrets.json \
+    QUERIER_CONFIG_DIR=/data/config \
+    QUERIER_ENVS=/data/envs \
     PORT=3000
 EXPOSE 3000
 VOLUME ["/data"]

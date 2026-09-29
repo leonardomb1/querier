@@ -1,5 +1,5 @@
 // Run every cell of a notebook in a fresh session and print what came back.
-//   bun scripts/run-notebook.ts notebooks/demo [-p key=value ...]
+//   bun scripts/run-notebook.ts notebooks/default/demo [-p key=value ...]
 
 import { loadNotebook } from "../server/notebook";
 import { LocalRunner } from "../server/runner/local";

@@ -113,6 +113,10 @@ export interface Session {
   /** A cell's result in full, as a file: Parquet or CSV bytes, in chunks.
    *  Throws before the first chunk when there is no such result. */
   export(name: string, format: ExportFormat): Promise<AsyncIterable<Uint8Array>>;
+  /** What the kernel's machine and processes use: Prometheus text exposition
+   *  (node_cpu_seconds_total, node_memory_*_bytes, process_*), answered even
+   *  while a cell runs. */
+  metrics(): Promise<string>;
   /** Forget every table and declaration, keeping the process. */
   reset(): Promise<void>;
   close(): Promise<void>;
@@ -132,10 +136,18 @@ export interface Sandbox {
   egress?: string[];
 }
 
+/** A built environment's Python packages (environments.ts): the folder for a local kernel, the disk for a microVM. */
+export interface PackageSet {
+  dir: string;
+  image: string;
+}
+
 export interface OpenOptions {
   notebookDir: string;
   env?: Record<string, string>;
   sandbox?: Sandbox;
+  /** Python packages on top of the base image's: the notebook's shadow the workspace's */
+  packages?: { workspace?: PackageSet | null; notebook?: PackageSet | null };
 }
 
 export interface Runner {

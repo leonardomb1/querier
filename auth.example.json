@@ -1,0 +1,57 @@
+{
+  "providers": [
+    {
+      "id": "corp",
+      "type": "ldap",
+      "label": "Corporate AD",
+      "url": "ldaps://dc1.corp.example.com:636",
+      "caFile": "/data/config/corp-ca.pem",
+      "bindDn": "CN=svc-querier,OU=Service Accounts,DC=corp,DC=example,DC=com",
+      "bindPassword": "env:LDAP_BIND_PASSWORD",
+      "baseDn": "DC=corp,DC=example,DC=com",
+      "userFilter": "(&(objectClass=user)(sAMAccountName={username}))",
+      "groupBaseDn": "DC=corp,DC=example,DC=com",
+      "nestedGroups": true,
+      "attributes": {
+        "department": "department",
+        "title": "title",
+        "company": "company",
+        "employeeType": "employeeType",
+        "costCenter": "extensionAttribute1"
+      }
+    },
+    {
+      "id": "entra",
+      "type": "oidc",
+      "label": "Microsoft",
+      "issuer": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+      "clientId": "<application-client-id>",
+      "clientSecret": "env:ENTRA_CLIENT_SECRET",
+      "scopes": ["openid", "profile", "email", "offline_access", "User.Read", "GroupMember.Read.All"],
+      "entraGraphOverage": true,
+      "attributes": {
+        "department": "department",
+        "jobTitle": "jobtitle",
+        "roles": "roles"
+      }
+    },
+    {
+      "id": "keycloak",
+      "type": "oidc",
+      "label": "Keycloak",
+      "issuer": "https://sso.example.com/realms/corp",
+      "clientId": "querier",
+      "clientSecret": "env:KEYCLOAK_CLIENT_SECRET",
+      "groupsClaim": "groups",
+      "attributes": {
+        "department": "department",
+        "realmRoles": "realm_access.roles"
+      }
+    }
+  ],
+  "session": {
+    "absoluteHours": 12,
+    "idleMinutes": 120,
+    "refreshMinutes": 15
+  }
+}

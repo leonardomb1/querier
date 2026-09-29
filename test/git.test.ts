@@ -15,8 +15,9 @@ const $ = (cmd: string[], cwd: string) => Bun.spawnSync(cmd, { cwd, env: { ...pr
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "querier-git-"));
   store = new Store(join(root, "notebooks"));
-  await store.create("nb", "Git test"); // 01_notes.md, 02_query.sql
-  git = new Git(store.dir("nb"), noSecrets);
+  await store.createWorkspace("w");
+  await store.create("w/nb", "Git test"); // 01_notes.md, 02_query.sql
+  git = new Git(store.dir("w/nb"), noSecrets);
 });
 afterAll(() => rm(root, { recursive: true, force: true }));
 
@@ -26,20 +27,20 @@ test("a notebook is untracked until it opts in; init commits it as it is", async
   const s = await git.status();
   expect(s).toMatchObject({ tracked: true, branch: "main", cells: [], files: [], identity: who });
   expect(Object.keys(s.original).sort()).toEqual(["notes", "query"]);
-  expect(await Bun.file(join(store.dir("nb"), ".gitignore")).text()).toContain("*.parquet");
+  expect(await Bun.file(join(store.dir("w/nb"), ".gitignore")).text()).toContain("*.parquet");
 });
 
 test("changes are reported per cell: added, modified, moved, deleted", async () => {
-  await store.save("nb", "query", "SELECT 2 AS two;\n");
-  await store.add("nb", "python", "query"); // new cell `py`, after query
-  await store.move("nb", "notes", 2); // renumbered: moved, not deleted + added
+  await store.save("w/nb", "query", "SELECT 2 AS two;\n");
+  await store.add("w/nb", "python", "query"); // new cell `py`, after query
+  await store.move("w/nb", "notes", 2); // renumbered: moved, not deleted + added
   const s = await git.status();
   expect(s.cells).toEqual([
     { name: "notes", change: "moved", file: "03_notes.md", was: "01_notes.md" },
     { name: "py", change: "added", file: "02_py.py" },
     { name: "query", change: "modified", file: "01_query.sql", was: "02_query.sql" },
   ]);
-  await store.remove("nb", "py");
+  await store.remove("w/nb", "py");
   expect((await git.status()).cells.map((c) => [c.name, c.change])).toEqual([
     ["notes", "moved"],
     ["query", "modified"],
@@ -59,7 +60,7 @@ test("commit, log and show", async () => {
 
 test("restore a cell, or the whole notebook, without committing", async () => {
   const [latest, first] = await git.log();
-  await store.save("nb", "query", "SELECT 3 AS three;\n");
+  await store.save("w/nb", "query", "SELECT 3 AS three;\n");
   await git.restore("HEAD", ["query"]);
   expect((await git.status()).cells).toEqual([]);
 
@@ -76,7 +77,7 @@ test("restore a cell, or the whole notebook, without committing", async () => {
 test("branches: create, and refuse to switch with changes", async () => {
   await git.createBranch("experiment");
   expect((await git.branches()).find((b) => b.current)?.name).toBe("experiment");
-  await store.save("nb", "query", "SELECT 4;\n");
+  await store.save("w/nb", "query", "SELECT 4;\n");
   expect(git.switchBranch("main")).rejects.toThrow("Commit or discard");
   await git.restore();
   await git.switchBranch("main");
@@ -106,7 +107,7 @@ test("push, and pull from another clone: fast-forward, then rebase on divergence
   await Bun.write(join(other, "02_notes.md"), "# theirs\n");
   $(["git", "-c", "user.name=O", "-c", "user.email=o@x", "commit", "-qam", "Their notes"], other);
   $(["git", "push", "-q"], other);
-  await store.save("nb", "query", "SELECT 'mine' AS who;\n");
+  await store.save("w/nb", "query", "SELECT 'mine' AS who;\n");
   await git.commit("My query");
   expect(git.pull()).rejects.toThrow("both moved on");
   await git.pull(true);
@@ -120,7 +121,7 @@ test("push, and pull from another clone: fast-forward, then rebase on divergence
   await Bun.write(join(other, "01_query.sql"), "SELECT 'theirs again';\n");
   $(["git", "-c", "user.name=O", "-c", "user.email=o@x", "commit", "-qam", "Theirs again"], other);
   $(["git", "push", "-q"], other);
-  await store.save("nb", "query", "SELECT 'mine again';\n");
+  await store.save("w/nb", "query", "SELECT 'mine again';\n");
   await git.commit("Mine again");
   expect(git.pull(true)).rejects.toThrow("change the same lines");
   s = await git.status();

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "../components/ui/Select.svelte";
   import { params, setParam } from "./runtime.svelte";
 
   // A PARAM's control inside the template: a text box, or a dropdown of `options`.
@@ -9,10 +10,13 @@
 <label class="control">
   <span>{label ?? param}</span>
   {#if options}
-    <select {value} onchange={(e) => setParam(param, e.currentTarget.value)}>
-      <option value="">All</option>
-      {#each options as o}<option value={String(o)}>{o}</option>{/each}
-    </select>
+    <Select
+      value={value ?? ""}
+      class="control-select"
+      label={label ?? param}
+      options={[{ value: "", label: "All" }, ...options.map((o) => ({ value: String(o), label: String(o) }))]}
+      onchange={(v) => setParam(param, v)}
+    />
   {:else}
     <input {value} onchange={(e) => setParam(param, e.currentTarget.value)} spellcheck="false" />
   {/if}
@@ -39,7 +43,7 @@
     border-right: 1px solid var(--hair);
   }
   input,
-  select {
+  .control :global(.select) {
     border: 0;
     border-radius: 0;
     height: 100%;
@@ -47,5 +51,8 @@
     padding: 0 0.5rem;
     background: none;
     color: var(--ink);
+  }
+  .control :global(.select) {
+    padding-right: 0.25rem;
   }
 </style>

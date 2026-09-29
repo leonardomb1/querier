@@ -4,11 +4,12 @@
   import { cubicOut } from "svelte/easing";
   import { slide } from "svelte/transition";
   import { hash } from "../../../shared/hash";
-  import { api, type Cell } from "../lib/api";
+  import { api, nbUrl, type Cell } from "../lib/api";
   import type { NotebookCtl } from "../lib/notebook.svelte";
   import Editor, { type Mark } from "./Editor.svelte";
   import Icon from "./Icon.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
+  import { menu as menuOf } from "../lib/can";
   import Outputs from "./Outputs.svelte";
 
   let { ctl, cell, index }: { ctl: NotebookCtl; cell: Cell; index: number } = $props();
@@ -102,8 +103,11 @@
     return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
   }
 
-  const menu = $derived<(MenuItem | "-")[]>([
-    ...(change === "modified" || change === "added"
+  // only what they may do: viewing, running, changing (lib/can.ts)
+  const ifRun = (item: MenuItem) => (ctl.mayRun ? item : false);
+  const ifEdit = (item: MenuItem) => (ctl.mayEdit ? item : false);
+  const menu = $derived<(MenuItem | "-")[]>(menuOf(
+    ...(ctl.mayEdit && (change === "modified" || change === "added")
       ? [
           { label: showDiff ? "Hide changes" : "Show changes", run: () => (ctl.diffs[name] = !showDiff) },
           {
@@ -114,23 +118,23 @@
           "-" as const,
         ]
       : []),
-    { label: ctl.inReport(name) ? "Hide from report" : "Show in report", run: () => ctl.toggleInReport(name) },
+    ifEdit({ label: ctl.inReport(name) ? "Hide from report" : "Show in report", run: () => ctl.toggleInReport(name) }),
     "-",
-    { label: "Run just this cell", run: () => ctl.run([name], { withDeps: false }), disabled: isMd },
-    { label: "Run above", run: () => ctl.runAbove(name), disabled: index === 0 },
-    { label: "Run this and below", run: () => ctl.runBelow(name) },
+    ifRun({ label: "Run just this cell", run: () => ctl.run([name], { withDeps: false }), disabled: isMd }),
+    ifRun({ label: "Run above", run: () => ctl.runAbove(name), disabled: index === 0 }),
+    ifRun({ label: "Run this and below", run: () => ctl.runBelow(name) }),
     "-",
     { label: fold.code ? "Show code" : "Hide code", hint: "h", run: () => ctl.fold(name, "code") },
     { label: fold.output ? "Show output" : "Hide output", hint: "o", run: () => ctl.fold(name, "output"), disabled: isMd },
-    { label: "Rename", run: () => ((draftName = name), (renaming = true)) },
-    { label: "Move up", hint: "⇧K", run: () => ctl.move(name, -1), disabled: index === 0 },
-    { label: "Move down", hint: "⇧J", run: () => ctl.move(name, 1), disabled: index === ctl.order.length - 1 },
-    { label: "Convert to SQL", hint: "y", run: () => ctl.setLang(name, "sql"), disabled: cell.lang === "sql" },
-    { label: "Convert to Python", hint: "p", run: () => ctl.setLang(name, "python"), disabled: cell.lang === "python" },
-    { label: "Convert to Markdown", hint: "m", run: () => ctl.setLang(name, "md"), disabled: isMd },
+    ifEdit({ label: "Rename", run: () => ((draftName = name), (renaming = true)) }),
+    ifEdit({ label: "Move up", hint: "⇧K", run: () => ctl.move(name, -1), disabled: index === 0 }),
+    ifEdit({ label: "Move down", hint: "⇧J", run: () => ctl.move(name, 1), disabled: index === ctl.order.length - 1 }),
+    ifEdit({ label: "Convert to SQL", hint: "y", run: () => ctl.setLang(name, "sql"), disabled: cell.lang === "sql" }),
+    ifEdit({ label: "Convert to Python", hint: "p", run: () => ctl.setLang(name, "python"), disabled: cell.lang === "python" }),
+    ifEdit({ label: "Convert to Markdown", hint: "m", run: () => ctl.setLang(name, "md"), disabled: isMd }),
     "-",
-    { label: "Delete", hint: "d d", danger: true, run: () => ctl.remove(name) },
-  ]);
+    ifEdit({ label: "Delete", hint: "d d", danger: true, run: () => ctl.remove(name) }),
+  ));
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -142,7 +146,7 @@
   class:editing={selected && ctl.mode === "edit"}
   class:stale={fresh === "stale"}
   onpointerdown={(e) => {
-    if (!(e.target as HTMLElement).closest(".cm-editor, button, input, select, a, .result")) ctl.select(name);
+    if (!(e.target as HTMLElement).closest(".monaco-editor, .editor, button, input, select, a, .result")) ctl.select(name);
   }}
 >
   <header>
@@ -159,7 +163,7 @@
       </form>
       {#if renameError}<span class="err">{renameError}</span>{/if}
     {:else}
-      <button class="name" title="Rename. Other cells refer to it by this name." onclick={() => ((draftName = name), (renaming = true))}>{name}</button>
+      <button class="name" title={ctl.mayEdit ? "Rename. Other cells refer to it by this name." : "Other cells refer to it by this name."} disabled={!ctl.mayEdit} onclick={() => ((draftName = name), (renaming = true))}>{name}</button>
     {/if}
     <span class="lang">{isMd ? "markdown" : cell.lang === "python" ? "python" : "sql"}</span>
     {#if change}
@@ -196,13 +200,13 @@
     </span>
 
     <span class="actions">
-      {#if !isMd}
+      {#if !isMd && ctl.mayRun}
         {#if status === "running" || status === "queued"}
           <button class="icon stop" title="Stop  (i i)" aria-label="Stop" onclick={() => ctl.interrupt()}><Icon name="stop" size={12} /></button>
         {:else}
           <button class="icon run" title="Run  ⇧↵" aria-label="Run" onclick={() => ctl.run([name])}><Icon name="play" size={13} /></button>
         {/if}
-      {:else}
+      {:else if isMd && ctl.mayEdit}
         <button class="text" onclick={() => (editingMd ? (editingMd = false) : ctl.select(name, "edit"))}>{editingMd ? "Done" : "Edit"}</button>
       {/if}
       <Menu items={menu} />
@@ -221,6 +225,7 @@
         lang={cell.lang}
         {marks}
         {autofocus}
+        readOnly={!ctl.mayEdit}
         onchange={(s) => ctl.edit(name, s)}
         onrun={(advance) => {
           if (isMd) editingMd = false;
@@ -236,7 +241,7 @@
           if (ctl.selected === name) ctl.mode = "command";
           if (isMd && source.trim()) editingMd = false;
         }}
-        complete={(lang, src, pos) => ctl.conn.complete(lang, src, pos)}
+        complete={ctl.mayRun ? (lang, src, pos) => ctl.conn.complete(lang, src, pos) : undefined}
         hover={(_, word) => ctl.hoverInfo(word)}
         original={committed}
         {showDiff}
@@ -257,11 +262,11 @@
         <Outputs
           {run}
           cell={name}
-          exportUrl="/api/notebooks/{encodeURIComponent(ctl.name)}/cells/{encodeURIComponent(name)}/export"
+          exportUrl="{nbUrl(ctl.name)}/cells/{encodeURIComponent(name)}/export"
           onsearch={(terms) => ctl.conn.filter(name, terms)}
           onstop={() => ctl.interrupt()}
           sandbox={ctl.conn.info.sandbox ? { egress: ctl.conn.info.egress ?? "" } : null}
-          onsandbox={() => (ctl.sandbox = true)}
+          onsandbox={() => ctl.openSettings("nb-sandbox")}
         />
       </div>
     {/if}

@@ -1,44 +1,4 @@
-<script lang="ts">
-  import {
-    acceptCompletion,
-    autocompletion,
-    closeBrackets,
-    closeBracketsKeymap,
-    completionKeymap,
-    completionStatus,
-    startCompletion,
-    type CompletionContext,
-    type CompletionResult,
-  } from "@codemirror/autocomplete";
-  import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
-  import { html } from "@codemirror/lang-html";
-  import { markdown } from "@codemirror/lang-markdown";
-  import { python } from "@codemirror/lang-python";
-  import { sql } from "@codemirror/lang-sql";
-  import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
-  import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
-  import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-  import { Compartment, EditorState, Prec } from "@codemirror/state";
-  import {
-    crosshairCursor,
-    drawSelection,
-    dropCursor,
-    EditorView,
-    highlightActiveLine,
-    highlightActiveLineGutter,
-    hoverTooltip,
-    keymap,
-    lineNumbers,
-    placeholder,
-    rectangularSelection,
-  } from "@codemirror/view";
-  import { onMount } from "svelte";
-  import type { Lang } from "../lib/api";
-  import { basaltDialect, FUNCTIONS, fnDoc } from "../lib/basalt";
-  import type { Completion } from "../lib/conn.svelte";
-  import { fnCard, highlight, infoCard, parameterHints, theme, toOption, type HoverInfo } from "../lib/editor";
-  import { gitGutter, inlineDiff, setOriginal } from "../lib/gitdiff";
-
+<script lang="ts" module>
   export interface Mark {
     line: number;
     col?: number;
@@ -46,10 +6,26 @@
     message: string;
     severity?: "error" | "warning";
   }
+</script>
+
+<script lang="ts">
+  import { onMount } from "svelte";
+  import type { Lang } from "../lib/api";
+  import type { Completion } from "../lib/conn.svelte";
+  import type { HoverInfo } from "../lib/editor";
+  import { fonts } from "../lib/fonts.svelte";
+  import { lineChanges } from "../lib/linediff";
+  import type { TemplateResult } from "../lib/templatecomplete";
+  import { zoom } from "../lib/zoom.svelte";
+
+  // A code editor: Monaco, VS Code's own (lib/monaco.ts), loaded on first use.
+  // For a cell it grows with its text inside the page; as a file editor (`fill`)
+  // it takes its parent's height and scrolls. Beside the lines, marks of what
+  // changed since the last commit; on demand, the inline diff against it.
 
   interface Props {
     value: string;
-    /** a cell's language, or "svelte": a report template (HTML, with its script and style) */
+    /** a cell's language, or "svelte": a report template */
     lang: Lang | "svelte";
     marks?: Mark[];
     autofocus?: boolean;
@@ -72,8 +48,10 @@
     onsave?: () => void;
     /** The cursor moved: its line and column, 1-based. */
     oncursor?: (line: number, col: number) => void;
-    /** A report template's completions (lib/templatecomplete.ts), beside HTML's and JavaScript's own. */
-    templateCompletion?: (ctx: CompletionContext) => CompletionResult | null;
+    /** A report template's completions (lib/templatecomplete.ts). */
+    templateCompletion?: (doc: string, pos: number) => TemplateResult;
+    /** They may read it, not change it. */
+    readOnly?: boolean;
   }
   let {
     value,
@@ -93,203 +71,341 @@
     onsave,
     oncursor,
     templateCompletion,
+    readOnly = false,
   }: Props = $props();
 
-  const diffSlot = new Compartment();
+  type Monaco = typeof import("monaco-editor/editor/editor.api");
+  type Code = import("monaco-editor/editor/editor.api").editor.IStandaloneCodeEditor;
 
   let host: HTMLDivElement;
-  let view: EditorView;
+  let mounted = $state(false);
+  let M: Monaco | null = null;
+  let lib: typeof import("../lib/monaco") | null = null;
+  let model: import("monaco-editor/editor/editor.api").editor.ITextModel | null = null;
+  let base: import("monaco-editor/editor/editor.api").editor.ITextModel | null = null;
+  /** the editor typed into: the plain one, or the diff's changed side */
+  let editor: Code | null = null;
+  let diff: import("monaco-editor/editor/editor.api").editor.IStandaloneDiffEditor | null = null;
+  let plain: import("monaco-editor/editor/editor.api").editor.IStandaloneCodeEditor | null = null;
+  const subs: { dispose(): void }[] = [];
+  let gitMarks: import("monaco-editor/editor/editor.api").editor.IEditorDecorationsCollection | null = null;
+  let destroyed = false;
 
+  const mono = () => getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace";
+  const fontSize = () => Math.round(13 * zoom.value * 10) / 10;
   // svelte-ignore state_referenced_locally
-  const language = {
-    sql: () => sql({ dialect: basaltDialect }),
-    python: () => python(),
-    md: () => markdown(),
-    svelte: () => html({ selfClosingTags: true }),
-  }[lang];
+  const PLACEHOLDER = { sql: "SELECT …", python: "# python", md: "Write in markdown", svelte: "" }[lang];
 
-  async function source(ctx: CompletionContext) {
-    if (!complete) return null;
-    const word = ctx.matchBefore(/[\w$.]+/);
-    const inString = lang === "python" && ctx.matchBefore(/(?:col\(|\[)\s*["'][^"']*/);
-    if (!ctx.explicit && !word && !inString) return null;
-    const got = await complete(lang, ctx.state.doc.toString(), ctx.pos);
-    if (ctx.aborted) return null;
-    const options = got.items.map((i) => toOption(i, lang));
-    if (lang === "sql") {
-      // basalt's functions, with their docs, when the kernel did not offer them
-      const typed = ctx.state.sliceDoc(got.start, ctx.pos).toLowerCase();
-      const have = new Set(options.map((o) => o.label.toLowerCase()));
-      for (const fn of FUNCTIONS) {
-        if (fn.name.startsWith(typed) && !have.has(fn.name)) options.push(toOption({ text: fn.name, kind: "function" }, lang));
-      }
+  function options() {
+    const cell = !fill;
+    return {
+      theme: lib!.themeName(),
+      readOnly,
+      readOnlyMessage: { value: "You may view this notebook, not change it." },
+      fontFamily: mono(),
+      fontSize: fontSize(),
+      lineHeight: Math.round(fontSize() * 1.6),
+      fontLigatures: false,
+      minimap: { enabled: fill && lang === "svelte" },
+      scrollBeyondLastLine: false,
+      wordWrap: wrap ? ("on" as const) : ("off" as const),
+      lineNumbers: lang === "md" ? ("off" as const) : ("on" as const),
+      lineNumbersMinChars: 3,
+      lineDecorationsWidth: 10,
+      glyphMargin: false,
+      folding: lang !== "md",
+      showFoldingControls: "mouseover" as const,
+      renderLineHighlight: "line" as const,
+      renderLineHighlightOnlyWhenFocus: cell,
+      overviewRulerLanes: cell ? 0 : 2,
+      overviewRulerBorder: false,
+      hideCursorInOverviewRuler: cell,
+      // a cell grows with its text: the page scrolls, not the cell
+      scrollbar: cell
+        ? { vertical: "hidden" as const, horizontal: wrap ? ("hidden" as const) : ("auto" as const), alwaysConsumeMouseWheel: false, useShadows: false }
+        : { useShadows: false, verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+      padding: { top: 6, bottom: 6 },
+      // suggestions and hovers are not cut off by the cell around the editor
+      fixedOverflowWidgets: true,
+      placeholder: PLACEHOLDER,
+      tabSize: lang === "python" ? 4 : 2,
+      insertSpaces: true,
+      detectIndentation: false,
+      quickSuggestions: lang === "md" ? false : { other: true, comments: false, strings: lang !== "sql" },
+      suggestOnTriggerCharacters: lang !== "md",
+      wordBasedSuggestions: "off" as const,
+      suggest: { showIcons: true, preview: false, showStatusBar: false },
+      parameterHints: { enabled: lang === "sql" },
+      bracketPairColorization: { enabled: lang !== "md" },
+      guides: { indentation: fill, bracketPairs: false },
+      stickyScroll: { enabled: false },
+      smoothScrolling: true,
+      cursorSmoothCaretAnimation: "on" as const,
+      automaticLayout: false,
+    };
+  }
+
+  /** The editor's height: its content's, for a cell; its parent's, as a file. */
+  function layout() {
+    const e = diff ?? plain;
+    if (!e || !editor) return;
+    if (fill) e.layout({ width: host.clientWidth, height: host.clientHeight });
+    else {
+      const h = Math.max(34, editor.getContentHeight());
+      host.style.height = `${h}px`;
+      e.layout({ width: host.clientWidth, height: h });
     }
-    if (!options.length) return null;
-    return { from: got.start, to: got.end, options, validFor: /^[\w$]*$/ };
   }
 
-  /** Tab completes: accept an open list, wait for one on its way, ask for one
-   *  after a word; indent only at the start of a line or after whitespace. */
-  function tab(v: EditorView): boolean {
-    const status = completionStatus(v.state);
-    if (status === "active") return acceptCompletion(v);
-    if (status === "pending") return true;
-    const sel = v.state.selection.main;
-    if (lang === "md" || !sel.empty) return false;
-    const before = v.state.sliceDoc(Math.max(0, sel.head - 1), sel.head);
-    return /[\w$.]/.test(before) ? startCompletion(v) : false;
+  function wire(e: Code) {
+    const monaco = M!;
+    editor = e;
+    subs.push(
+      e.onDidContentSizeChange((ev) => ev.contentHeightChanged && !fill && layout()),
+      e.onDidChangeCursorPosition((ev) => oncursor?.(ev.position.lineNumber, ev.position.column)),
+      e.onDidFocusEditorWidget(() => onfocus?.()),
+      e.onDidBlurEditorWidget(() => onblur?.()),
+    );
+    const K = monaco.KeyCode;
+    const Mod = monaco.KeyMod;
+    // the notebook's keys, unless a widget of the editor's own is open
+    const free = "!suggestWidgetVisible && !parameterHintsVisible && !inSnippetMode";
+    if (onrun) {
+      e.addAction({ id: "querier.run.next", label: "Run the Cell and Go to the Next", keybindings: [Mod.Shift | K.Enter], precondition: free, run: () => onrun(true) });
+      e.addAction({ id: "querier.run", label: "Run the Cell", keybindings: [Mod.CtrlCmd | K.Enter], precondition: free, run: () => onrun(false) });
+    }
+    if (onsave) e.addAction({ id: "querier.save", label: "Save", keybindings: [Mod.CtrlCmd | K.KeyS], run: () => onsave() });
+    // Escape leaves the editor (a cell's command mode), once its own widgets are closed
+    e.addAction({
+      id: "querier.leave",
+      label: "Leave the Editor",
+      keybindings: [K.Escape],
+      precondition: `${free} && !findWidgetVisible && !editorHasMultipleSelections && !markersNavigationVisible`,
+      run: () => (document.activeElement as HTMLElement | null)?.blur(),
+    });
   }
 
-  const hovering = hoverTooltip((v, pos) => {
-    const range = v.state.wordAt(pos);
-    if (!range) return null;
-    let from = range.from;
-    if (v.state.sliceDoc(from - 1, from) === "$") from--;
-    const word = v.state.sliceDoc(from, range.to);
-    const called = /^\s*\(/.test(v.state.sliceDoc(range.to, range.to + 8));
-    const fn = lang === "sql" && called ? fnDoc(word) : undefined;
-    const info = fn ? null : hover?.(lang, word);
-    if (!fn && !info) return null;
-    return { pos: from, end: range.to, above: true, create: () => ({ dom: fn ? fnCard(fn) : infoCard(info!) }) };
-  });
+  /** The plain editor, or the inline diff against the last commit. */
+  function build(withDiff: boolean) {
+    const monaco = M!;
+    for (const s of subs.splice(0)) s.dispose();
+    const hadFocus = editor?.hasTextFocus() ?? false;
+    const at = editor?.getPosition();
+    plain?.dispose();
+    diff?.dispose();
+    plain = diff = null;
+    gitMarks = null;
+    if (withDiff && original != null) {
+      base ??= monaco.editor.createModel(original, lib!.LANG_ID[lang]);
+      base.setValue(original);
+      diff = monaco.editor.createDiffEditor(host, {
+        ...options(),
+        renderSideBySide: false,
+        useInlineViewWhenSpaceIsLimited: true,
+        originalEditable: false,
+        renderMarginRevertIcon: true,
+        renderIndicators: true,
+        renderOverviewRuler: false,
+        ignoreTrimWhitespace: false,
+      });
+      diff.setModel({ original: base, modified: model! });
+      wire(diff.getModifiedEditor());
+    } else {
+      plain = monaco.editor.create(host, { ...options(), model: model! });
+      wire(plain);
+      gitMarks = plain.createDecorationsCollection();
+      paintGit();
+    }
+    layout();
+    if (at) editor!.setPosition(at);
+    if (hadFocus) editor!.focus();
+  }
+
+  // -- change marks beside the lines, against the last commit (VS Code's dirty diff)
+  let gitTimer: ReturnType<typeof setTimeout>;
+  function paintGit() {
+    if (!gitMarks || !model || !M) return;
+    if (original == null) return void gitMarks.clear();
+    const c = lineChanges(original, model.getValue());
+    const last = model.getLineCount();
+    const deco = (line: number, cls: string) => ({ range: new M!.Range(line, 1, line, 1), options: { isWholeLine: true, linesDecorationsClassName: cls } });
+    gitMarks.set([
+      ...c.added.map((l) => deco(l, "q-git q-git-added")),
+      ...c.modified.map((l) => deco(l, "q-git q-git-modified")),
+      ...c.deleted.map((l) => deco(Math.min(l, last), l > last ? "q-git q-git-deleted-below" : "q-git q-git-deleted")),
+    ]);
+  }
 
   onMount(() => {
-    view = new EditorView({
-      parent: host,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
-          Prec.highest(
-            keymap.of([
-              { key: "Shift-Enter", run: () => (onrun?.(true), true) },
-              { key: "Mod-Enter", run: () => (onrun?.(false), true) },
-              // an open completion list closes first; the next Esc leaves the editor
-              { key: "Escape", run: (v) => completionStatus(v.state) == null && (v.contentDOM.blur(), true) },
-              { key: "Mod-/", run: toggleComment },
-            ]),
-          ),
-          Prec.high(keymap.of([{ key: "Tab", run: tab }])),
-          lineNumbers(),
-          gitGutter,
-          diffSlot.of([]),
-          highlightActiveLineGutter(),
-          foldGutter({ openText: "⌄", closedText: "›" }),
-          highlightActiveLine(),
-          history(),
-          drawSelection(),
-          dropCursor(),
-          EditorState.allowMultipleSelections.of(true),
-          rectangularSelection(),
-          crosshairCursor(),
-          indentOnInput(),
-          indentUnit.of(lang === "python" ? "    " : "  "),
-          bracketMatching(),
-          closeBrackets(),
-          highlightSelectionMatches({ wholeWords: true, minSelectionLength: 2 }),
-          search({ top: true }),
-          lang === "md"
-            ? []
-            : lang === "svelte"
-              ? [
-                  // no override: the HTML and JavaScript modes offer their own, and ours join them
-                  autocompletion({ icons: true, maxRenderedOptions: 80 }),
-                  templateCompletion ? EditorState.languageData.of(() => [{ autocomplete: templateCompletion }]) : [],
-                  hovering,
-                ]
-              : [autocompletion({ override: [source], icons: true, maxRenderedOptions: 80 }), hovering],
-          lang === "sql" ? parameterHints : [],
-          keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
-          language(),
-          syntaxHighlighting(highlight),
-          theme,
-          wrap ? EditorView.lineWrapping : [],
-          onsave ? Prec.high(keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (onsave(), true) }])) : [],
-          placeholder(lang === "sql" ? "SELECT …" : lang === "python" ? "# python" : "Write in markdown"),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged) onchange(u.state.doc.toString());
-            if (oncursor && (u.selectionSet || u.docChanged)) {
-              const at = u.state.selection.main.head;
-              const line = u.state.doc.lineAt(at);
-              oncursor(line.number, at - line.from + 1);
-            }
-            if (u.focusChanged) (u.view.hasFocus ? onfocus : onblur)?.();
-          }),
-        ],
-      }),
-    });
-    if (autofocus) {
-      view.focus();
-      view.dispatch({ selection: { anchor: view.state.doc.length } });
-    }
-    return () => view.destroy();
+    let resize: ResizeObserver | undefined;
+    (async () => {
+      lib = await import("../lib/monaco");
+      M = await lib.loadMonaco();
+      if (destroyed) return;
+      model = M.editor.createModel(value, lib.LANG_ID[lang]);
+      subs.push({ dispose: lib.attachHooks(model, { lang, complete, hover, template: templateCompletion }) });
+      const modelSub = model.onDidChangeContent(() => {
+        const v = model!.getValue();
+        if (v !== value) onchange(v);
+        clearTimeout(gitTimer);
+        gitTimer = setTimeout(paintGit, 150);
+      });
+      host.replaceChildren();
+      mounted = true;
+      build(showDiff);
+      resize = new ResizeObserver(() => layout());
+      resize.observe(host);
+      document.fonts?.ready.then(() => M?.editor.remeasureFonts());
+      if (autofocus) {
+        editor!.focus();
+        const end = model.getFullModelRange().getEndPosition();
+        editor!.setPosition(end);
+      }
+      // the hooks go with the model: undone last
+      subs.push(modelSub);
+    })();
+    return () => {
+      destroyed = true;
+      resize?.disconnect();
+      clearTimeout(gitTimer);
+      for (const s of subs.splice(0)) s.dispose();
+      plain?.dispose();
+      diff?.dispose();
+      model?.dispose();
+      base?.dispose();
+    };
   });
 
   // Take outside changes (a reload, another tab, a rename) unless the user is typing here.
   $effect(() => {
     const v = value;
-    if (view && !view.hasFocus && v !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });
-    }
+    if (mounted && model && !editor?.hasTextFocus() && v !== model.getValue()) model.setValue(v);
   });
 
   // the last commit: change marks always, the inline diff when asked for
+  let inDiff = false;
   $effect(() => {
-    const base = original;
-    const diff = showDiff && base != null;
-    if (!view) return;
-    view.dispatch({ effects: [setOriginal.of(base), diffSlot.reconfigure(diff ? inlineDiff(base!) : [])] });
+    const want = showDiff && original != null;
+    void original;
+    if (!mounted) return;
+    if (want !== inDiff) {
+      inDiff = want;
+      build(want);
+    } else if (want && base && original != null && base.getValue() !== original) base.setValue(original);
+    else paintGit();
   });
 
+  // problems, as the editor's markers
   $effect(() => {
-    if (!view) return;
-    const doc = view.state.doc;
-    const diagnostics: Diagnostic[] = marks
-      .filter((m) => m.line >= 1 && m.line <= doc.lines)
-      .map((m) => {
-        const line = doc.line(m.line);
-        const from = m.col ? Math.min(line.from + m.col - 1, line.to) : line.from;
-        let to = m.end_col ? Math.min(line.from + m.end_col - 1, line.to) : line.to;
-        if (m.col && !m.end_col) to = from + (/^\w+/.exec(doc.sliceString(from, line.to))?.[0].length || 1);
-        return { from, to: Math.max(to, Math.min(from + 1, line.to)), severity: m.severity ?? "error", message: m.message };
-      });
-    view.dispatch(setDiagnostics(view.state, diagnostics));
+    const list = marks;
+    if (!mounted || !model || !M) return;
+    const lines = model.getLineCount();
+    M.editor.setModelMarkers(
+      model,
+      "querier",
+      list
+        .filter((m) => m.line >= 1 && m.line <= lines)
+        .map((m) => {
+          const text = model!.getLineContent(m.line);
+          const col = m.col ?? 1;
+          const end = m.end_col ?? (m.col ? col + (/^\w+/.exec(text.slice(col - 1))?.[0].length || 1) : text.length + 1);
+          return {
+            severity: m.severity === "warning" ? M!.MarkerSeverity.Warning : M!.MarkerSeverity.Error,
+            message: m.message,
+            startLineNumber: m.line,
+            startColumn: col,
+            endLineNumber: m.line,
+            endColumn: Math.max(end, col + 1),
+          };
+        }),
+    );
+  });
+
+  // permissions can change under an open editor (a share given or taken)
+  $effect(() => {
+    const ro = readOnly;
+    if (mounted) (diff ?? plain)?.updateOptions({ readOnly: ro });
+  });
+
+  // the code font and the zoom
+  $effect(() => {
+    void fonts.code;
+    void zoom.value;
+    if (!mounted || !editor) return;
+    queueMicrotask(() => {
+      (diff ?? plain)?.updateOptions({ fontFamily: mono(), fontSize: fontSize(), lineHeight: Math.round(fontSize() * 1.6) });
+      document.fonts?.ready.then(() => M?.editor.remeasureFonts());
+      layout();
+    });
   });
 
   /** Put the cursor at a line (and column), 1-based, scrolled into the middle. */
   export function goto(line: number, col = 1) {
-    if (!view) return;
-    const l = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)));
-    const pos = Math.min(l.from + Math.max(0, col - 1), l.to);
-    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
-    view.focus();
+    if (!editor || !model) return;
+    const l = Math.max(1, Math.min(line, model.getLineCount()));
+    editor.setPosition({ lineNumber: l, column: Math.max(1, col) });
+    editor.revealLineInCenter(l);
+    editor.focus();
   }
 
   export function focus() {
-    view?.focus();
+    editor?.focus();
   }
 
   /** Replace the selection with `text` and focus: what the sidebar inserts. */
   export function insert(text: string) {
-    if (!view) return;
-    view.dispatch(view.state.replaceSelection(text));
-    view.focus();
+    if (!editor) return;
+    const sel = editor.getSelection();
+    if (sel) editor.executeEdits("insert", [{ range: sel, text, forceMoveMarkers: true }]);
+    editor.focus();
   }
 </script>
 
-<div class="editor" class:fill bind:this={host}></div>
+<div class="editor" class:fill bind:this={host}>
+  {#if !mounted}<pre class="boot">{value || PLACEHOLDER}</pre>{/if}
+</div>
 
 <style>
   .editor {
+    position: relative;
     background: var(--code-bg);
     min-height: 2.125rem;
   }
   .editor.fill {
     height: 100%;
   }
-  .editor.fill :global(.cm-editor) {
-    height: 100%;
+  /* until Monaco is here: the code as it will stand, so nothing jumps */
+  .boot {
+    margin: 0;
+    padding: 6px 0.75rem 6px 3.4rem;
+    font: 0.8125rem/1.6 var(--mono);
+    color: var(--code-ink);
+    white-space: pre-wrap;
+    overflow: hidden;
   }
-  .editor.fill :global(.cm-scroller) {
-    overflow: auto;
+  /* the change marks beside the lines */
+  .editor :global(.q-git) {
+    margin-left: 3px;
+    width: 3px !important;
+  }
+  .editor :global(.q-git-added) {
+    background: var(--git-added);
+  }
+  .editor :global(.q-git-modified) {
+    background: var(--git-modified);
+  }
+  .editor :global(.q-git-deleted),
+  .editor :global(.q-git-deleted-below) {
+    width: 0 !important;
+    height: 0 !important;
+    border-left: 5px solid var(--git-deleted);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+  }
+  .editor :global(.q-git-deleted) {
+    transform: translateY(-4px);
+  }
+  .editor :global(.q-git-deleted-below) {
+    transform: translateY(calc(1lh - 4px));
   }
 </style>

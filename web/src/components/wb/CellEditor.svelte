@@ -18,7 +18,7 @@
   }
 
   $effect(() => {
-    wb.actions[`cell:${cell}`] = spec?.lang === "md"
+    wb.actions[`cell:${cell}`] = spec?.lang === "md" || !ctl.mayRun
       ? [{ icon: "notebook", title: "Show in the notebook", run: () => showInNotebook() }]
       : [
           busy
@@ -56,6 +56,7 @@
       value={source}
       lang={spec.lang}
       marks={ctl.marksFor(cell)}
+      readOnly={!ctl.mayEdit}
       onchange={(s) => ctl.edit(cell, s)}
       onrun={() => run()}
       onfocus={() => {
@@ -63,7 +64,7 @@
         ctl.lastEditor = cell;
       }}
       oncursor={(line, col) => (wb.cursor = { line, col, lang: LANG[spec.lang] })}
-      complete={(lang, src, pos) => ctl.conn.complete(lang, src, pos)}
+      complete={ctl.mayRun ? (lang, src, pos) => ctl.conn.complete(lang, src, pos) : undefined}
       hover={(_, word) => ctl.hoverInfo(word)}
       fill
       wrap={spec.lang === "md"}

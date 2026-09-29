@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Host } from "../server/host";
 import { LocalRunner } from "../server/runner/local";
-import { Secrets } from "../server/secrets";
 import { Store } from "../server/store";
 
 // the microVM's file handling without a VM: the kernel runs on a copy of the
@@ -13,13 +12,13 @@ import { Store } from "../server/store";
 let dir: string;
 let store: Store;
 let host: Host;
-const out = () => join(dir, "nb/demo/output");
+const out = () => join(dir, "nb/default/demo/output");
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "querier-out-"));
-  await cp(resolve(import.meta.dir, "fixtures/demo"), join(dir, "nb/demo"), { recursive: true });
+  await cp(resolve(import.meta.dir, "fixtures/demo"), join(dir, "nb/default/demo"), { recursive: true });
   store = new Store(join(dir, "nb"));
-  host = new Host("demo", store, new LocalRunner({ copy: true }), new Secrets(join(dir, "secrets.json")));
+  host = new Host("default/demo", store, new LocalRunner({ copy: true }), { env: async () => ({}) });
 });
 
 afterAll(async () => {
@@ -89,12 +88,12 @@ describe("output/", () => {
     for (const p of ["../01_sales.sql", "../../../etc/x", "/etc/passwd", "sub/../../notebook.json"]) {
       expect(await keep(p)).toContain("refused");
     }
-    expect(await Bun.file(join(dir, "nb/demo/01_sales.sql")).text()).not.toBe("evil");
-    expect(await Bun.file(join(dir, "nb/demo/notebook.json")).text()).not.toBe("evil");
+    expect(await Bun.file(join(dir, "nb/default/demo/01_sales.sql")).text()).not.toBe("evil");
+    expect(await Bun.file(join(dir, "nb/default/demo/notebook.json")).text()).not.toBe("evil");
   });
 
   test("nothing outside output/ comes back", async () => {
     await host.scratch("python", `open("01_sales.sql", "w").write("DROP")\nopen("/tmp/x", "w").write("x")`, {});
-    expect(await Bun.file(join(dir, "nb/demo/01_sales.sql")).text()).not.toBe("DROP");
+    expect(await Bun.file(join(dir, "nb/default/demo/01_sales.sql")).text()).not.toBe("DROP");
   });
 });

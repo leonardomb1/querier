@@ -2,8 +2,9 @@
 // edits, selection and mode, what is stale, and every action a button, key or
 // palette entry can take.
 
-import { api, type GitStatus, type Lang, type Notebook, type Report } from "./api";
+import { api, type Action, type ConnectionInfo, type GitStatus, type Lang, type Notebook, type Report } from "./api";
 import { hash } from "../../../shared/hash";
+import { nbHref } from "./href";
 import { NotebookConn, type Diagnostic } from "./conn.svelte";
 import type { HoverInfo } from "./editor";
 import { downstream, edges, freshness, plan, type Ran } from "../../../shared/graph";
@@ -55,8 +56,8 @@ function credentialMarks(src: string): Mark[] {
     const env = conn ? `${conn.toUpperCase()}_${key.startsWith("pass") ? "PASS" : key.toUpperCase()}` : key.toUpperCase();
     const hint =
       key.startsWith("pass") && conn
-        ? `Store it as the secret ${env} and drop this option: connection ${conn} reads it by itself.`
-        : `Store it as the secret ${env} and write ${m[1]} = env('${env}').`;
+        ? `Put it in a connection giving ${env} and drop this option: connection ${conn} reads it by itself.`
+        : `Put it in a connection giving ${env} and write ${m[1]} = env('${env}').`;
     const line = src.slice(0, at).split("\n").length;
     const col = at - src.lastIndexOf("\n", at - 1);
     out.push({ line, col, end_col: col + m[0].length, severity: "warning", message: `A credential in a cell ends up in its file and in git. ${hint}` });
@@ -82,9 +83,19 @@ export class NotebookCtl {
   folds = $state<Record<string, Fold>>({});
   palette = $state(false);
   help = $state(false);
-  secrets = $state(false);
-  sandbox = $state(false);
-  ai = $state(false);
+  /** The Share dialog: who else has this notebook. */
+  sharing = $state(false);
+  /** The connections this notebook's kernel gets, for the signed-in person (what they may use here). */
+  connections = $state<ConnectionInfo[]>([]);
+  /** A connection whose credentials are being entered (from the notebook's prompt). */
+  enteringCredentials = $state<ConnectionInfo | null>(null);
+  /** The sandbox panel (the status bar's): usage, kernel, size and network. */
+  sandboxPanel = $state(false);
+  /** A request to open the Settings editor: which scope, and which of its groups. */
+  settings = $state<{ scope: "user" | "workspace" | "notebook"; section?: string } | null>(null);
+  openSettings(section?: string, scope: "user" | "workspace" | "notebook" = "notebook") {
+    this.settings = { scope, section };
+  }
   /** Git for this notebook: null until first asked. */
   git = $state<GitStatus | null>(null);
   gitBusy = $state<string | null>(null);
@@ -106,14 +117,19 @@ export class NotebookCtl {
   constructor(
     readonly name: string,
     initial?: Notebook,
+    /** the published report, as its viewers see it: its frozen cells, run in their report kernel */
+    readonly reportMode = false,
   ) {
-    this.conn = new NotebookConn(name, () => this.refresh());
+    this.conn = new NotebookConn(name, () => this.refresh(), reportMode);
+    this.conn.onnotice = (m) => this.say(m);
     this.params = stored(`querier:params:${name}`, {});
     this.folds = stored(`querier:folds:${name}`, {});
     if (initial) this.take(initial);
     else this.refresh();
+    if (reportMode) return;
+    this.refreshConnections();
     this.refreshGit().then(() => {
-      if (this.git && !this.git.tracked && !this.git.declined) this.gitPrompt = true;
+      if (this.git && !this.git.tracked && !this.git.declined && this.mayEdit) this.gitPrompt = true;
     });
   }
 
@@ -122,7 +138,8 @@ export class NotebookCtl {
   order = $derived(this.book?.cells.map((c) => c.name) ?? []);
   code = $derived(new Set(this.book?.cells.filter((c) => c.lang !== "md").map((c) => c.name) ?? []));
   up = $derived.by(() => edges(this.order, this.conn.deps));
-  bound = $derived(Object.fromEntries(Object.entries(this.params).filter(([, v]) => v !== "")));
+  // (a published report's bound PARAMs: what the server sets them to for this viewer)
+  bound = $derived({ ...Object.fromEntries(Object.entries(this.params).filter(([, v]) => v !== "")), ...(this.book?.boundValues ?? {}) });
   fresh = $derived.by(() =>
     freshness(
       this.order,
@@ -132,8 +149,15 @@ export class NotebookCtl {
       this.sources,
       this.bound,
       this.code,
+      // a published report seen without its code: its cells' hashes
+      Object.fromEntries((this.book?.cells ?? []).filter((c) => c.hash && !c.source).map((c) => [c.name, c.hash!])),
     ),
   );
+  // what the signed-in person may do here: the rest isn't offered (and the server refuses it)
+  // (a published report's viewer runs its frozen cells: viewing it is enough; they change nothing)
+  mayRun = $derived.by(() => !!this.book?.permissions?.includes(this.reportMode ? "report.view" : "notebook.run"));
+  mayEdit = $derived.by(() => !this.reportMode && !!this.book?.permissions?.includes("notebook.edit"));
+  may = (action: Action) => !!this.book?.permissions?.includes(action);
   busy = $derived.by(() => Object.values(this.conn.runs).some((r) => r.state === "running" || r.state === "queued"));
   staleCount = $derived(this.order.filter((n) => this.fresh[n] === "stale").length);
 
@@ -170,7 +194,7 @@ export class NotebookCtl {
 
   /** Change the report's settings: applied here at once, saved behind. */
   async setReport(change: (r: Report) => void) {
-    if (!this.book) return;
+    if (!this.book || !this.mayEdit) return;
     const next = structuredClone($state.snapshot(this.report)) as Report;
     change(next);
     this.book.report = next;
@@ -188,7 +212,7 @@ export class NotebookCtl {
       return bs;
     }).then(() =>
       this.say(on ? `${cell} shows in the report.` : `${cell} is hidden from the report.`, {
-        href: `#/nb/${encodeURIComponent(this.name)}/report`,
+        href: nbHref(this.name, true),
         label: "Open report",
       }),
     );
@@ -247,6 +271,22 @@ export class NotebookCtl {
     return refs;
   });
 
+  async refreshConnections() {
+    try {
+      this.connections = (await api.connections.forNotebook(this.name)).connections;
+    } catch {
+      this.connections = [];
+    }
+  }
+
+  /** Per-person connections the cells read that the signed-in person hasn't set their own credentials for. */
+  needsCredentials = $derived(
+    this.connections.filter((c) => c.credentials === "per-user" && c.permissions.includes("connection.use") && c.variables.some((v) => this.secretRefs.has(v) && !c.mine.includes(v))),
+  );
+
+  /** Variables the cells read that no connection they may use gives. */
+  unprovided = $derived([...this.secretRefs].filter(([v]) => !this.connections.some((c) => c.permissions.includes("connection.use") && c.variables.includes(v))));
+
   /** What hovering `word` in a cell shows: a table, a param, a declaration. */
   hoverInfo(word: string): HoverInfo | null {
     const table = this.conn.tables.find((t) => t.name === word);
@@ -290,12 +330,12 @@ export class NotebookCtl {
 
   async refresh() {
     try {
-      this.take(await api.load(this.name));
+      this.take(await (this.reportMode ? api.report.get(this.name) : api.load(this.name)));
       this.error = "";
     } catch (e: any) {
       this.error = e.message;
     }
-    this.refreshGitSoon();
+    if (!this.reportMode) this.refreshGitSoon();
   }
 
   // -- git
@@ -398,6 +438,7 @@ export class NotebookCtl {
   }
 
   edit(cell: string, source: string) {
+    if (!this.mayEdit) return;
     this.checkSoon(cell);
     this.sources[cell] = source;
     this.dirty.add(cell);
@@ -426,6 +467,7 @@ export class NotebookCtl {
   }
 
   private async structural(fn: () => Promise<unknown>) {
+    if (!this.mayEdit) return void this.say("You may view this notebook, not change it.");
     try {
       await this.flush();
       await fn();
@@ -439,6 +481,7 @@ export class NotebookCtl {
 
   /** Run cells, preceded by whatever they depend on that is not fresh. */
   async run(cells: string[], { withDeps = true } = {}) {
+    if (!this.mayRun) return void this.say("You may view this notebook, not run it.");
     await this.flush();
     const code = cells.filter((c) => this.code.has(c));
     const list = withDeps ? plan(code, this.order, this.up, this.fresh) : code;
@@ -463,6 +506,7 @@ export class NotebookCtl {
 
   /** shift+enter: run, then move to the next cell (making one at the end). */
   async runAndAdvance(cell: string) {
+    if (!this.mayRun) return void this.say("You may view this notebook, not run it.");
     await this.run([cell]);
     const i = this.order.indexOf(cell);
     const next = this.order[i + 1];
@@ -471,11 +515,11 @@ export class NotebookCtl {
   }
 
   interrupt() {
-    this.conn.interrupt();
+    if (this.mayRun) this.conn.interrupt();
   }
 
   restart() {
-    this.conn.restart();
+    if (this.mayRun) this.conn.restart();
   }
 
   // -- selection
@@ -542,6 +586,7 @@ export class NotebookCtl {
   }
 
   async rename(cell: string, to: string) {
+    if (!this.mayEdit) return;
     await this.flush();
     const { updated } = await api.rename(this.name, cell, to);
     this.say(

@@ -5,8 +5,10 @@
     message: string;
     detail?: string;
     onretry?: () => void;
+    /** signed in, but without access: a way out to another account */
+    onsignout?: () => void;
   }
-  let { status, title, message, detail, onretry }: Props = $props();
+  let { status, title, message, detail, onretry, onsignout }: Props = $props();
 </script>
 
 <section>
@@ -15,7 +17,7 @@
   <p class="message">{message}</p>
   <div class="actions">
     {#if onretry}<button class="primary" onclick={onretry}>Try again</button>{/if}
-    <a href="#/">Back to notebooks</a>
+    {#if onsignout}<button onclick={onsignout}>Sign out</button>{:else}<a href="#/">Back to workspaces</a>{/if}
   </div>
   {#if detail}
     <details>

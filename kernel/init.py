@@ -56,6 +56,13 @@ def main():
         sh("mount", "-o", "ro", "/dev/vdb", "/mnt/notebook-ro")
         sh("mount", "-t", "overlay", "overlay", "-o", "lowerdir=/mnt/notebook-ro,upperdir=/tmp/.nb/upper,workdir=/tmp/.nb/work", "/notebook")
 
+    # the environment's Python packages, read-only: the workspace's (vdc), the notebook's (vdd)
+    python_path = []
+    for dev, where in (("/dev/vdd", "/mnt/env-nb"), ("/dev/vdc", "/mnt/env-ws")):
+        if os.path.exists(dev):
+            sh("mount", "-o", "ro", dev, where)
+            python_path.append(where)
+
     loopback_up()
     os.makedirs("/tmp/querier", exist_ok=True)
     os.makedirs("/tmp/mpl", exist_ok=True)
@@ -67,6 +74,9 @@ def main():
         "PYTHONUNBUFFERED": "1",
         "BASALT_BIN": "/usr/local/bin/basalt",
     }
+    # the notebook's packages shadow the workspace's, which shadow the image's own
+    if python_path:
+        env["PYTHONPATH"] = ":".join(python_path)
     agent = subprocess.Popen(
         ["/usr/local/bin/python3", "/opt/querier/kernel.py", "--vsock", "5000", "--work", "/tmp/querier", "--cwd", "/notebook", "--sync-output"],
         env=env,

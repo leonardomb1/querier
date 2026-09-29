@@ -10,7 +10,7 @@ export class TemplateCtl {
   draft = $state("");
   dirty = $state(false);
   saving = $state(false);
-  built = $state<{ version: string; error: TemplateError | null } | null>(null);
+  built = $state<{ version: string; error: TemplateError | null; token: string } | null>(null);
   /** an error the template threw in its frame */
   frameError = $state("");
   private timer?: ReturnType<typeof setTimeout>;
@@ -28,7 +28,10 @@ export class TemplateCtl {
       return;
     }
     if (!this.dirty) this.draft = source;
-    api.template.get(this.ctl.name).then((r) => r.source != null && (this.built = { version: r.version!, error: r.error ?? null }), () => {});
+    // a published report's: built from what was published, fetched with its own token
+    const b = this.ctl.book;
+    if (this.ctl.reportMode) return void (this.built = b?.templateVersion ? { version: b.templateVersion, error: null, token: b.templateToken ?? "" } : null);
+    api.template.get(this.ctl.name).then((r) => r.source != null && (this.built = { version: r.version!, error: r.error ?? null, token: r.token ?? "" }), () => {});
   }
 
   edit(source: string) {
@@ -44,7 +47,7 @@ export class TemplateCtl {
     if (!this.dirty) return;
     const source = this.draft;
     this.saving = true;
-    const r = await api.template.save(this.ctl.name, source).catch((e) => ({ version: this.built?.version ?? "", error: { message: e.message } as TemplateError }));
+    const r = await api.template.save(this.ctl.name, source).catch((e) => ({ version: this.built?.version ?? "", error: { message: e.message } as TemplateError, token: this.built?.token ?? "" }));
     this.saving = false;
     this.built = r;
     this.seen = source;

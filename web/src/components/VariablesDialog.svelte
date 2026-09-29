@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import { cubicOut } from "svelte/easing";
   import { fade, scale } from "svelte/transition";
   import type { Report, VarSpec } from "../lib/api";
@@ -59,38 +60,36 @@
         <div class="head">
           <code class="name">${p.name}</code>
           <span class="type">{p.type}</span>
-          <select
+          <Select
             value={c}
-            onchange={(e) => {
-              const v = e.currentTarget.value as VarSpec["control"];
-              set(p.name, v === (isTime(p.name) ? "time" : "text") ? null : { control: v, source: v === "select" ? { values: [] } : undefined });
-            }}
-          >
-            <option value="text">Text box</option>
-            <option value="select">Dropdown</option>
-            {#if isTime(p.name)}<option value="time">Time picker</option>{/if}
-          </select>
+            label="Control of {p.name}"
+            options={[
+              { value: "text" as VarSpec["control"], label: "Text box" },
+              { value: "select" as VarSpec["control"], label: "Dropdown" },
+              ...(isTime(p.name) ? [{ value: "time" as VarSpec["control"], label: "Time picker" }] : []),
+            ]}
+            onchange={(v) => set(p.name, v === (isTime(p.name) ? "time" : "text") ? null : { control: v, source: v === "select" ? { values: [] } : undefined })}
+          />
         </div>
         {#if c === "select"}
           {@const src = spec?.source}
           <div class="source">
             <label>
               <span>Options</span>
-              <select
+              <Select
                 value={src && "cell" in src ? src.cell : ""}
-                onchange={(e) => set(p.name, { control: "select", source: e.currentTarget.value ? { cell: e.currentTarget.value } : { values: [] } })}
-              >
-                <option value="">A fixed list</option>
-                {#each cells as cell}<option value={cell.name}>From cell {cell.name}</option>{/each}
-              </select>
+                options={[{ value: "", label: "A fixed list" }, ...cells.map((cell) => ({ value: cell.name, label: `From cell ${cell.name}` }))]}
+                onchange={(v) => set(p.name, { control: "select", source: v ? { cell: v } : { values: [] } })}
+              />
             </label>
             {#if src && "cell" in src}
               <label>
                 <span>Column</span>
-                <select value={src.column ?? ""} onchange={(e) => set(p.name, { control: "select", source: { cell: src.cell, column: e.currentTarget.value || undefined } })}>
-                  <option value="">The first</option>
-                  {#each columnsOf(src.cell) as col}<option value={col}>{col}</option>{/each}
-                </select>
+                <Select
+                  value={src.column ?? ""}
+                  options={[{ value: "", label: "The first" }, ...columnsOf(src.cell).map((col) => ({ value: col, label: col }))]}
+                  onchange={(v) => set(p.name, { control: "select", source: { cell: src.cell, column: v || undefined } })}
+                />
               </label>
             {:else}
               <label class="grow">
@@ -164,8 +163,8 @@
     font-size: 0.72rem;
     color: var(--muted);
   }
-  .head select,
-  .source select {
+  .head :global(.select),
+  .source :global(.select) {
     height: 1.875rem;
     font-size: 0.8125rem;
   }

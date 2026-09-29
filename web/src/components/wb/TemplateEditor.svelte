@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ask } from "../../lib/dialog.svelte";
   import type { Mark } from "../Editor.svelte";
   import type { NotebookCtl } from "../../lib/notebook.svelte";
   import type { TemplateCtl } from "../../lib/template.svelte";
@@ -33,7 +34,7 @@
         icon: "trash",
         title: "Delete report.svelte (the blocks layout stays)",
         run: async () => {
-          if (!confirm("Delete report.svelte? The blocks layout stays.")) return;
+          if (!(await ask("Delete report.svelte?", { detail: "The report goes back to its blocks layout, which stays as it is.", ok: "Delete", danger: true }))) return;
           await tpl.remove();
           wb.closeKey("template");
         },
@@ -56,6 +57,7 @@
   value={tpl.draft}
   lang="svelte"
   {marks}
+  readOnly={!ctl.mayEdit}
   onchange={(s) => tpl.edit(s)}
   onsave={() => tpl.save()}
   oncursor={(line, col) => (wb.cursor = { line, col, lang: "Svelte" })}

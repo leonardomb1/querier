@@ -12,7 +12,7 @@
 
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { configDir } from "../auth/config";
 import { UserError } from "../store";
 
 export const LEVELS = ["off", "read", "run", "edit"] as const;
@@ -24,11 +24,18 @@ export interface ClientInfo {
   name: string;
   created: number;
   lastUsed?: number;
+  /** the principal the token acts as: a personal access token */
+  owner?: string;
+  /** given an owner when accounts came: it had none before */
+  adopted?: boolean;
 }
 
 interface File {
   clients: (ClientInfo & { hash: string })[];
+  /** by notebook id, "workspace/notebook" */
   access: Record<string, Level>;
+  /** a workspace's default for its notebooks */
+  workspaces?: Record<string, Level>;
 }
 
 const sha256 = (s: string) => new Bun.CryptoHasher("sha256").update(s).digest("hex");
@@ -37,7 +44,7 @@ export class Access {
   readonly file: string;
   private cache?: File;
 
-  constructor(file = process.env.QUERIER_MCP ?? join(dirname(process.env.QUERIER_SECRETS ?? join(homedir(), ".config/querier/secrets.json")), "mcp.json")) {
+  constructor(file = process.env.QUERIER_MCP ?? join(configDir, "mcp.json")) {
     this.file = file;
   }
 
@@ -55,26 +62,40 @@ export class Access {
     this.cache = data;
   }
 
-  async clients(): Promise<ClientInfo[]> {
-    return (await this.read()).clients.map(({ hash: _, ...c }) => c);
+  /** Clients: every one, or `owner`'s. */
+  async clients(owner?: string): Promise<ClientInfo[]> {
+    return (await this.read()).clients.filter((c) => owner == null || c.owner === owner).map(({ hash: _, ...c }) => c);
   }
 
-  /** A new client; its token is returned once and never again. */
-  async create(name: string): Promise<{ client: ClientInfo; token: string }> {
+  /** A new client acting as `owner`; its token is returned once and never again. */
+  async create(name: string, owner: string): Promise<{ client: ClientInfo; token: string }> {
     name = name.trim();
     if (!name) throw new UserError("Name the client, e.g. “Claude Code on my laptop”.");
     const data = structuredClone(await this.read());
     const token = `qk_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url")}`;
-    const client = { id: crypto.randomUUID().slice(0, 8), name, created: Date.now() };
+    const client: ClientInfo = { id: crypto.randomUUID().slice(0, 8), name, created: Date.now(), owner };
     data.clients.push({ ...client, hash: sha256(token) });
     await this.write(data);
     return { client, token };
   }
 
-  async revoke(id: string) {
+  /** Revoke a client; with `owner`, only one of theirs. */
+  async revoke(id: string, owner?: string) {
     const data = structuredClone(await this.read());
-    data.clients = data.clients.filter((c) => c.id !== id);
+    const c = data.clients.find((x) => x.id === id);
+    if (!c || (owner != null && c.owner !== owner)) throw new UserError("There is no such client.");
+    data.clients = data.clients.filter((x) => x.id !== id);
     await this.write(data);
+  }
+
+  /** Tokens from before accounts had no owner: they become `owner`'s (the sysadmin's), marked adopted. */
+  async adopt(owner: string): Promise<number> {
+    const data = structuredClone(await this.read());
+    const orphans = data.clients.filter((c) => !c.owner);
+    if (!orphans.length) return 0;
+    for (const c of orphans) Object.assign(c, { owner, adopted: true });
+    await this.write(data);
+    return orphans.length;
   }
 
   /** The client a bearer token belongs to, if any. */
@@ -93,14 +114,72 @@ export class Access {
     return info;
   }
 
+  /** A notebook's level: its own, else its workspace's default, else read. */
   async level(nb: string): Promise<Level> {
-    return (await this.read()).access[nb] ?? DEFAULT_LEVEL;
+    const data = await this.read();
+    return data.access[nb] ?? data.workspaces?.[nb.split("/")[0]] ?? DEFAULT_LEVEL;
   }
 
-  async setLevel(nb: string, level: Level) {
+  /** Whether the notebook has a level of its own (not its workspace's). */
+  async ownLevel(nb: string): Promise<Level | null> {
+    return (await this.read()).access[nb] ?? null;
+  }
+
+  async workspaceLevel(ws: string): Promise<Level> {
+    return (await this.read()).workspaces?.[ws] ?? DEFAULT_LEVEL;
+  }
+
+  async setWorkspaceLevel(ws: string, level: Level) {
     if (!LEVELS.includes(level)) throw new UserError(`Access must be one of ${LEVELS.join(", ")}.`);
     const data = structuredClone(await this.read());
-    if (level === DEFAULT_LEVEL) delete data.access[nb];
+    data.workspaces ??= {};
+    if (level === DEFAULT_LEVEL) delete data.workspaces[ws];
+    else data.workspaces[ws] = level;
+    await this.write(data);
+  }
+
+  /** Notebooks from before workspaces: their levels go under their new ids. */
+  async migrate(moved: string[], ws: string) {
+    const data = structuredClone(await this.read());
+    let changed = false;
+    for (const nb of moved) {
+      if (!(nb in data.access)) continue;
+      data.access[`${ws}/${nb === ws ? `${nb}-notebook` : nb}`] = data.access[nb];
+      delete data.access[nb];
+      changed = true;
+    }
+    if (changed) await this.write(data);
+  }
+
+  /** A workspace was renamed (to) or deleted (null). */
+  async moveWorkspace(ws: string, to: string | null) {
+    const data = structuredClone(await this.read());
+    if (data.workspaces?.[ws]) {
+      if (to) data.workspaces[to] = data.workspaces[ws];
+      delete data.workspaces[ws];
+    }
+    for (const id of Object.keys(data.access)) {
+      if (id.split("/")[0] !== ws) continue;
+      if (to) data.access[`${to}/${id.split("/")[1]}`] = data.access[id];
+      delete data.access[id];
+    }
+    await this.write(data);
+  }
+
+  /** A notebook was renamed (to) or deleted (null): its level follows, or goes. */
+  async moveNotebook(from: string, to: string | null) {
+    const data = structuredClone(await this.read());
+    if (!(from in data.access)) return;
+    if (to) data.access[to] = data.access[from];
+    delete data.access[from];
+    await this.write(data);
+  }
+
+  /** A notebook's own level; null returns it to its workspace's default. */
+  async setLevel(nb: string, level: Level | null) {
+    if (level != null && !LEVELS.includes(level)) throw new UserError(`Access must be one of ${LEVELS.join(", ")}.`);
+    const data = structuredClone(await this.read());
+    if (level == null) delete data.access[nb];
     else data.access[nb] = level;
     await this.write(data);
   }

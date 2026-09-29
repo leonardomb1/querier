@@ -281,17 +281,18 @@ describe("analysis and store", () => {
     const { Store } = await import("../server/store");
     const root = await mkdtemp(join(tmpdir(), "querier-store-"));
     const store = new Store(root);
-    await store.create("nb", "My notebook"); // starts as 01_notes.md, 02_query.sql
-    await store.add("nb", "python", "query");
-    await store.add("nb", "md", null);
-    await store.move("nb", "notes", 2);
-    await store.setLang("nb", "py", "sql");
-    const files = async () => (await Array.fromAsync(new Bun.Glob("*").scan(join(root, "nb")))).sort();
+    await store.createWorkspace("w");
+    await store.create("w/nb", "My notebook"); // starts as 01_notes.md, 02_query.sql
+    await store.add("w/nb", "python", "query");
+    await store.add("w/nb", "md", null);
+    await store.move("w/nb", "notes", 2);
+    await store.setLang("w/nb", "py", "sql");
+    const files = async () => (await Array.fromAsync(new Bun.Glob("*").scan(join(root, "w", "nb")))).sort();
     expect(await files()).toEqual(["01_notes2.md", "02_query.sql", "03_py.sql", "04_notes.md", "notebook.json"]);
-    await store.remove("nb", "query");
+    await store.remove("w/nb", "query");
     expect(await files()).toEqual(["01_notes2.md", "02_py.sql", "03_notes.md", "notebook.json"]);
     const [summary] = await store.list();
-    expect(summary).toMatchObject({ name: "nb", title: "My notebook", description: "What this notebook answers.", sql: 1, text: 2 });
+    expect(summary).toMatchObject({ id: "w/nb", workspace: "w", name: "nb", title: "My notebook", description: "What this notebook answers.", sql: 1, text: 2 });
     await rm(root, { recursive: true });
   });
 });
@@ -300,8 +301,9 @@ test("a rename rewrites the reads below it and moves the kernel's table", async 
   const { Store } = await import("../server/store");
   const root = await mkdtemp(join(tmpdir(), "querier-rename-"));
   const store = new Store(root);
-  await store.create("nb");
-  const dir = join(root, "nb");
+  await store.createWorkspace("w");
+  await store.create("w/nb");
+  const dir = join(root, "w", "nb");
   await Bun.write(join(dir, "02_query.sql"), "SELECT range AS id FROM RANGE(3);");
   await Bun.write(join(dir, "03_py.py"), "n = query.height  # query\nquery.select('id')");
   await Bun.write(join(dir, "04_agg.sql"), "SELECT COUNT(*) AS n FROM query WHERE 'query' <> '';");
@@ -309,7 +311,7 @@ test("a rename rewrites the reads below it and moves the kernel's table", async 
   const s = await runner.open({ notebookDir: dir });
   try {
     for (const [name, lang, src] of [["query", "sql", "SELECT range AS id FROM RANGE(3);"]] as const) await run(s, name, lang, src);
-    expect(await store.rename("nb", "query", "ids")).toEqual(["py", "agg"]);
+    expect(await store.rename("w/nb", "query", "ids")).toEqual(["py", "agg"]);
     expect(await Bun.file(join(dir, "03_py.py")).text()).toBe("n = ids.height  # query\nids.select('id')");
     expect(await Bun.file(join(dir, "04_agg.sql")).text()).toBe("SELECT COUNT(*) AS n FROM ids WHERE 'query' <> '';");
 
@@ -340,22 +342,94 @@ test("report settings: checked, and they follow a rename", async () => {
   const { Store } = await import("../server/store");
   const root = await mkdtemp(join(tmpdir(), "querier-report-"));
   const store = new Store(root);
-  await store.create("nb");
-  await store.settings("nb", {
+  await store.createWorkspace("w");
+  await store.create("w/nb");
+  await store.settings("w/nb", {
     report: { show: { query: true, notes: false }, half: ["query"], refresh: "5m", variables: { region: { control: "select", source: { cell: "query", column: "one" } } } },
   });
-  expect((await store.load("nb")).report?.half).toEqual(["query"]);
-  expect(store.settings("nb", { report: { refresh: "7m" } })).rejects.toThrow("report.refresh");
-  expect(store.settings("nb", { report: { show: { "../x": true } } })).rejects.toThrow("report.show");
-  await store.rename("nb", "query", "totals");
-  const r = (await store.load("nb")).report!;
+  expect((await store.load("w/nb")).report?.half).toEqual(["query"]);
+  expect(store.settings("w/nb", { report: { refresh: "7m" } })).rejects.toThrow("report.refresh");
+  expect(store.settings("w/nb", { report: { show: { "../x": true } } })).rejects.toThrow("report.show");
+  await store.rename("w/nb", "query", "totals");
+  const r = (await store.load("w/nb")).report!;
   expect(r.show).toEqual({ totals: true, notes: false });
   expect(r.half).toEqual(["totals"]);
   expect(r.variables?.region.source).toEqual({ cell: "totals", column: "one" });
-  await store.settings("nb", { report: { blocks: [{ id: "a", cell: "totals", width: 6, parts: ["table"] }, { id: "b", text: "hi" }] } });
-  expect(store.settings("nb", { report: { blocks: [{ id: "a", cell: "totals" }, { id: "a", text: "x" }] } })).rejects.toThrow("its own id");
-  expect(store.settings("nb", { report: { blocks: [{ id: "a", cell: "totals", parts: ["pie"] }] } })).rejects.toThrow("parts");
-  await store.rename("nb", "totals", "sums");
-  expect((await store.load("nb")).report?.blocks?.[0]).toEqual({ id: "a", cell: "sums", width: 6, parts: ["table"] });
+  await store.settings("w/nb", { report: { blocks: [{ id: "a", cell: "totals", width: 6, parts: ["table"] }, { id: "b", text: "hi" }] } });
+  expect(store.settings("w/nb", { report: { blocks: [{ id: "a", cell: "totals" }, { id: "a", text: "x" }] } })).rejects.toThrow("its own id");
+  expect(store.settings("w/nb", { report: { blocks: [{ id: "a", cell: "totals", parts: ["pie"] }] } })).rejects.toThrow("parts");
+  await store.rename("w/nb", "totals", "sums");
+  expect((await store.load("w/nb")).report?.blocks?.[0]).toEqual({ id: "a", cell: "sums", width: 6, parts: ["table"] });
+  await rm(root, { recursive: true });
+});
+
+test("notebooks: renamed (the folder; AI access follows), deleted (with it)", async () => {
+  const { Store } = await import("../server/store");
+  const { Access } = await import("../server/mcp/access");
+  const root = await mkdtemp(join(tmpdir(), "querier-nb-"));
+  const store = new Store(join(root, "nbs"));
+  const access = new Access(join(root, "mcp.json"));
+  await store.createWorkspace("w");
+  await store.create("w/sales", "Sales");
+  await store.create("w/other");
+  await access.setLevel("w/sales", "edit");
+
+  expect(store.renameNotebook("w/sales", "w/other")).rejects.toThrow("already exists");
+  expect(() => store.dir("../x")).toThrow("bad notebook id");
+  await store.renameNotebook("w/sales", "w/revenue");
+  await access.moveNotebook("w/sales", "w/revenue");
+  expect((await store.load("w/revenue")).title).toBe("Sales");
+  expect(store.load("w/sales")).rejects.toThrow("no notebook");
+  expect(await access.level("w/revenue")).toBe("edit");
+  expect(await access.level("w/sales")).toBe("read"); // the default again
+
+  await store.removeNotebook("w/revenue");
+  await access.moveNotebook("w/revenue", null);
+  expect((await store.list()).map((n) => n.name)).toEqual(["other"]);
+  expect(store.removeNotebook("w/revenue")).rejects.toThrow("no notebook");
+  await rm(root, { recursive: true });
+});
+
+test("workspaces: old notebooks move into default; AI access and sandbox inherit", async () => {
+  const { Store } = await import("../server/store");
+  const { Access } = await import("../server/mcp/access");
+  const root = await mkdtemp(join(tmpdir(), "querier-ws-"));
+  const nbs = join(root, "nbs");
+  // the old layout: notebooks at the top, one of them called "default"
+  for (const nb of ["a", "default", "z"]) await Bun.write(join(nbs, nb, "01_q.sql"), "SELECT 1;");
+  const store = new Store(nbs);
+  const access = new Access(join(root, "mcp.json"));
+  await access.setLevel("a", "run");
+  const moved = await store.migrate();
+  await access.migrate(moved, "default");
+  expect((await store.list()).map((n) => n.id).sort()).toEqual(["default/a", "default/default-notebook", "default/z"]);
+  expect(await store.migrate()).toEqual([]); // once only
+  expect((await store.workspaces())[0]).toMatchObject({ name: "default", title: "Default" });
+  expect(await access.level("default/a")).toBe("run");
+
+  await store.createWorkspace("team");
+  expect(store.createWorkspace("team")).rejects.toThrow("already exists");
+  await store.create("team/q");
+  // AI access: the notebook's own, else the workspace's
+  await access.setWorkspaceLevel("team", "edit");
+  expect(await access.level("team/q")).toBe("edit");
+  await access.setLevel("team/q", "off");
+  expect(await access.level("team/q")).toBe("off");
+  await access.setLevel("team/q", null);
+  expect(await access.level("team/q")).toBe("edit");
+  // sandbox: the notebook's size over the workspace's; egress from both
+  await store.workspaceSettings("team", { sandbox: { vcpus: 2, memory: 1024, egress: ["db.internal:5432"] }, attributes: { team: "finance" } });
+  await store.settings("team/q", { sandbox: { memory: 2048, egress: ["api.example.com:443"] } });
+  expect(await store.sandboxOf("team/q")).toEqual({ vcpus: 2, memory: 2048, egress: ["db.internal:5432", "api.example.com:443"] });
+  expect(store.workspaceSettings("team", { attributes: { "bad key!": "x" } })).rejects.toThrow();
+  // moving a notebook across workspaces; a workspace with notebooks is not deleted by accident
+  await store.renameNotebook("default/z", "team/z");
+  expect((await store.list("team")).map((n) => n.name).sort()).toEqual(["q", "z"]);
+  expect(store.removeWorkspace("team")).rejects.toThrow("still holds 2 notebooks");
+  await store.renameWorkspace("team", "finance");
+  await access.moveWorkspace("team", "finance");
+  expect(await access.level("finance/z")).toBe("edit");
+  await store.removeWorkspace("finance", true);
+  expect((await store.workspaces()).map((w) => w.name)).toEqual(["default"]);
   await rm(root, { recursive: true });
 });

@@ -22,7 +22,9 @@ export interface ParamDecl {
 }
 
 export interface Notebook {
+  /** its id, "workspace/notebook" (store.load); the folder's name from loadNotebook alone */
   name: string;
+  workspace?: string;
   dir: string;
   title: string;
   description?: string;

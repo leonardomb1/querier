@@ -17,15 +17,37 @@
     title = "More",
     label,
     icon = "more",
-  }: { items: (MenuItem | "-")[]; title?: string; label?: string; icon?: IconName } = $props();
+    trigger = true,
+  }: {
+    items: (MenuItem | "-")[];
+    title?: string;
+    label?: string;
+    icon?: IconName;
+    /** false: no button; the menu opens where `openAt` says (a context menu) */
+    trigger?: boolean;
+  } = $props();
 
   // A native popover lives in the top layer: no ancestor's overflow can clip it.
   // It is placed under its button by hand, flipping up when there is no room.
   const id = `menu-${nextId++}`;
-  let button: HTMLButtonElement;
+  let button = $state<HTMLButtonElement>();
   let pop: HTMLDivElement;
+  /** where a context menu was asked for */
+  let point: { x: number; y: number } | null = null;
+
+  /** Open at a point on the screen (a right click), as VS Code's context menus. */
+  export function openAt(x: number, y: number) {
+    point = { x, y };
+    pop.showPopover();
+  }
 
   function place() {
+    if (point || !button) {
+      const { x, y } = point ?? { x: 0, y: 0 };
+      pop.style.top = `${Math.max(8, Math.min(y, innerHeight - pop.offsetHeight - 8))}px`;
+      pop.style.left = `${Math.max(8, Math.min(x, innerWidth - pop.offsetWidth - 8))}px`;
+      return;
+    }
     const b = button.getBoundingClientRect();
     const h = pop.offsetHeight;
     const w = pop.offsetWidth;
@@ -51,9 +73,11 @@
 
 <svelte:window onscroll={() => pop?.matches(":popover-open") && pop.hidePopover()} onresize={() => pop?.matches(":popover-open") && place()} />
 
-<button class={label ? "text" : "icon"} {title} aria-label={title} popovertarget={id} bind:this={button}>
-  {#if label}{label}{:else}<Icon name={icon} size={icon === "more" ? 16 : 14} />{/if}
-</button>
+{#if trigger}
+  <button class={label ? "text" : "icon"} {title} aria-label={title} popovertarget={id} bind:this={button} onclick={() => (point = null)}>
+    {#if label}{label}{:else}<Icon name={icon} size={icon === "more" ? 16 : 14} />{/if}
+  </button>
+{/if}
 <div class="pop" {id} popover="auto" role="menu" tabindex="-1" bind:this={pop} {ontoggle} {onkeydown}>
   {#each items as item}
     {#if item === "-"}
@@ -93,6 +117,9 @@
     border-radius: 5px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
     padding: 0.25rem;
+    /* here, not only while open: closing, it stays shown (as flex) for the fade,
+       and a column only while open would lay the items out in a row meanwhile */
+    flex-direction: column;
     opacity: 0;
     transform: translateY(-0.25rem) scale(0.98);
     transform-origin: top right;
@@ -104,7 +131,6 @@
   }
   .pop:popover-open {
     display: flex;
-    flex-direction: column;
     opacity: 1;
     transform: none;
   }

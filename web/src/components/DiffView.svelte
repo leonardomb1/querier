@@ -1,51 +1,63 @@
 <script lang="ts">
-  import { markdown } from "@codemirror/lang-markdown";
-  import { python } from "@codemirror/lang-python";
-  import { sql } from "@codemirror/lang-sql";
-  import { syntaxHighlighting } from "@codemirror/language";
-  import { MergeView } from "@codemirror/merge";
-  import { EditorState } from "@codemirror/state";
-  import { EditorView, lineNumbers } from "@codemirror/view";
   import { onMount } from "svelte";
   import type { Lang } from "../lib/api";
-  import { basaltDialect } from "../lib/basalt";
-  import { highlight, theme } from "../lib/editor";
+  import { zoom } from "../lib/zoom.svelte";
 
-  // A read-only side-by-side diff of one cell: before on the left, after on the right.
+  // A read-only side-by-side diff of one cell: before on the left, after on the
+  // right, unchanged stretches folded away. Monaco's diff editor (lib/monaco.ts).
   let { before, after, lang }: { before: string; after: string; lang: Lang } = $props();
   let host: HTMLDivElement;
+  let height = $state(160);
 
   onMount(() => {
-    const language = { sql: () => sql({ dialect: basaltDialect }), python: () => python(), md: () => markdown() }[lang];
-    const base = [
-      lineNumbers(),
-      language(),
-      syntaxHighlighting(highlight),
-      theme,
-      EditorView.lineWrapping,
-      EditorState.readOnly.of(true),
-      EditorView.editable.of(false),
-      EditorView.theme({
-        ".cm-changedLine": { background: "var(--git-added-bg)" },
-        ".cm-changedText": { background: "var(--git-added-text)" },
-        ".cm-deletedChunk, .cm-merge-a .cm-changedLine": { background: "var(--git-deleted-bg)" },
-        ".cm-merge-a .cm-changedText": { background: "var(--git-deleted-text)" },
-        ".cm-collapsedLines": { background: "var(--surface-2)", color: "var(--muted)", fontFamily: "var(--sans)" },
-      }),
-    ];
-    const view = new MergeView({
-      a: { doc: before, extensions: base },
-      b: { doc: after, extensions: base },
-      parent: host,
-      gutter: true,
-      highlightChanges: true,
-      collapseUnchanged: { margin: 3, minSize: 4 },
-    });
-    return () => view.destroy();
+    let dispose = () => {};
+    let gone = false;
+    (async () => {
+      const lib = await import("../lib/monaco");
+      const monaco = await lib.loadMonaco();
+      if (gone) return;
+      const a = monaco.editor.createModel(before, lib.LANG_ID[lang]);
+      const b = monaco.editor.createModel(after, lib.LANG_ID[lang]);
+      const size = Math.round(13 * zoom.value * 10) / 10;
+      const diff = monaco.editor.createDiffEditor(host, {
+        theme: lib.themeName(),
+        readOnly: true,
+        originalEditable: false,
+        renderSideBySide: true,
+        useInlineViewWhenSpaceIsLimited: true,
+        hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 4 },
+        renderOverviewRuler: false,
+        scrollBeyondLastLine: false,
+        minimap: { enabled: false },
+        wordWrap: "on",
+        fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
+        fontSize: size,
+        lineHeight: Math.round(size * 1.6),
+        lineNumbersMinChars: 3,
+        padding: { top: 4, bottom: 4 },
+        scrollbar: { alwaysConsumeMouseWheel: false, useShadows: false },
+        automaticLayout: true,
+      });
+      diff.setModel({ original: a, modified: b });
+      // as tall as the diff, up to a limit: the dialog scrolls beyond it
+      const fit = () => (height = Math.min(416, Math.max(80, diff.getModifiedEditor().getContentHeight())));
+      const sub = diff.getModifiedEditor().onDidContentSizeChange(fit);
+      diff.onDidUpdateDiff(fit);
+      dispose = () => {
+        sub.dispose();
+        diff.dispose();
+        a.dispose();
+        b.dispose();
+      };
+    })();
+    return () => {
+      gone = true;
+      dispose();
+    };
   });
 </script>
 
-<div class="diff" bind:this={host}></div>
+<div class="diff" bind:this={host} style:height="{height}px"></div>
 
 <style>
   .diff {
@@ -53,12 +65,5 @@
     border-radius: 6px;
     overflow: hidden;
     background: var(--code-bg);
-  }
-  .diff :global(.cm-mergeView) {
-    max-height: 26rem;
-    overflow: auto;
-  }
-  .diff :global(.cm-merge-a) {
-    border-right: 1px solid var(--hair);
   }
 </style>

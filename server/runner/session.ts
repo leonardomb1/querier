@@ -39,7 +39,7 @@ class Chan<T> implements AsyncIterable<T> {
 let nextId = 1;
 
 // The message that ends each kind of request.
-const FINAL = new Set(["ready", "done", "tables", "complete", "reset", "inspect", "renamed", "forgot", "exported", "checked", "filtered"]);
+const FINAL = new Set(["ready", "done", "tables", "complete", "reset", "inspect", "renamed", "forgot", "exported", "checked", "filtered", "metrics"]);
 
 export class KernelSession implements Session {
   readonly id: string;
@@ -176,6 +176,18 @@ export class KernelSession implements Session {
         msg = await it.next();
       }
     })();
+  }
+
+  /** The kernel's scrape: Prometheus text exposition, answered even while a cell runs. */
+  async metrics(): Promise<string> {
+    for await (const msg of this.request("metrics")) {
+      if (msg.type === "metrics") {
+        if (msg.error) throw new Error(msg.error);
+        return msg.text;
+      }
+      if (msg.type === "error") throw new Error(msg.message);
+    }
+    throw new Error("no answer");
   }
 
   async forget(name: string) {

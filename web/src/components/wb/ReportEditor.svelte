@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "../ui/Select.svelte";
   import { marked } from "marked";
   import { untrack } from "svelte";
   import { flip } from "svelte/animate";
@@ -6,6 +7,7 @@
   import { fade } from "svelte/transition";
   import { hash } from "../../../../shared/hash";
   import { WIDTHS, type Block, type Part } from "../../../../shared/report";
+  import { nbUrl } from "../../lib/api";
   import { NotebookCtl, newBlockId } from "../../lib/notebook.svelte";
   import { blocksToTemplate, partsIn, templateCells } from "../../lib/report";
   import type { TemplateCtl } from "../../lib/template.svelte";
@@ -18,6 +20,8 @@
   import TemplateView from "../TemplateView.svelte";
   import Variables from "../Variables.svelte";
   import VariablesDialog from "../VariablesDialog.svelte";
+  import PublishDialog from "../PublishDialog.svelte";
+  import { ago } from "../../lib/format";
 
   // The report, as its viewers see it: blocks on a 12-column grid, each a cell's
   // output (all of it, or its chart, table or printed text) or text of its own —
@@ -246,23 +250,32 @@
     else if (kiosk) toggleKiosk();
   }
 
-  const exportUrl = (cell: string) => `/api/notebooks/${encodeURIComponent(name)}/cells/${encodeURIComponent(cell)}/export`;
+  let publishing = $state(false);
+
+  const exportUrl = (cell: string) => `${nbUrl(name)}/cells/${encodeURIComponent(cell)}/export${ctl.reportMode ? "?report=1" : ""}`;
 
   // the tab bar's actions for this editor
   $effect(() => {
+    const edits = ctl.mayEdit;
     wb.actions.report = [
-      { icon: "refresh", title: busy ? "Running…" : "Run the report's cells again", run: refresh, disabled: busy || !targets.length },
-      ...(view === "blocks" ? [{ icon: "edit", title: arranging ? "Done arranging" : "Arrange: what shows, and where", run: () => (arranging = !arranging), on: arranging }] : []),
-      template == null
-        ? { icon: "file-code", title: "Write the report as a Svelte template", run: writeTemplate }
-        : { icon: "file-code", title: "Edit report.svelte", run: editTemplate },
-      ...(template != null
+      { icon: "refresh", title: busy ? "Running…" : "Run the report's cells again", run: refresh, disabled: busy || !targets.length || !ctl.mayRun },
+      ...(edits && view === "blocks" ? [{ icon: "edit", title: arranging ? "Done arranging" : "Arrange: what shows, and where", run: () => (arranging = !arranging), on: arranging }] : []),
+      ...(edits
+        ? [
+            template == null
+              ? { icon: "file-code", title: "Write the report as a Svelte template", run: writeTemplate }
+              : { icon: "file-code", title: "Edit report.svelte", run: editTemplate },
+          ]
+        : []),
+      ...(edits && template != null
         ? [
             view === "template"
               ? { icon: "layout", title: "Show the blocks layout instead", run: () => setView("blocks") }
               : { icon: "layout", title: "Show report.svelte instead", run: () => setView("template") },
           ]
         : []),
+      // publishing it for its viewers: who may share the notebook
+      ...(!ctl.reportMode && ctl.may("notebook.share") ? [{ icon: "cloud-upload", title: ctl.book?.published ? "Published: change or publish again…" : "Publish for viewers…", run: () => (publishing = true) }] : []),
       { icon: "screen-full", title: "Full screen  (Esc to leave)", run: toggleKiosk },
     ];
   });
@@ -283,20 +296,25 @@
       {#if arranging && params.length}
         <button class="text" onclick={() => (controlsOpen = true)}><Icon name="settings" size={14} />Controls</button>
       {/if}
-      {#if updated && !busy}<span class="note">{updated}</span>{/if}
-      <select
+      {#if !ctl.reportMode && ctl.book.published && ctl.may("notebook.share")}
+        <button class="pub" class:changed={ctl.book.published.changed} onclick={() => (publishing = true)} title="Its viewers get the published version">
+          <Icon name={ctl.book.published.changed ? "warning" : "cloud"} size={13} />
+          {ctl.book.published.changed ? "Changed since published" : `Published ${ago(ctl.book.published.at)}`}
+        </button>
+      {/if}
+      {#if ctl.reportMode && ctl.book.published?.snapshotAt && !busy}
+        <span class="note" title="Run by the server on a schedule, as {ctl.book.published.owner}">Updated {ago(ctl.book.published.snapshotAt)}</span>
+      {:else if updated && !busy}<span class="note">{updated}</span>{/if}
+      <Select
         class="refresh"
+        compact
         value={report.refresh ?? ""}
         title="Refresh automatically"
-        aria-label="Refresh automatically"
-        onchange={(e) => {
-          const v = e.currentTarget.value;
-          ctl.setReport((r) => (v ? (r.refresh = v) : delete r.refresh));
-        }}
-      >
-        <option value="">Auto-refresh off</option>
-        {#each INTERVALS as [k]}<option value={k}>Every {k}</option>{/each}
-      </select>
+        label="Refresh automatically"
+        disabled={!ctl.mayEdit}
+        options={[{ value: "", label: "Auto-refresh off" }, ...INTERVALS.map(([k]) => ({ value: k, label: `Every ${k}` }))]}
+        onchange={(v) => ctl.setReport((r) => (v ? (r.refresh = v) : delete r.refresh))}
+      />
       {#if kiosk}
         <button class="icon" title="Leave full screen (Esc)" aria-label="Leave full screen" onclick={toggleKiosk}><Icon name="shrink" /></button>
       {/if}
@@ -313,7 +331,7 @@
         <button class="chip" onclick={editTemplate}>Edit report.svelte</button>
       </div>
     {:else if built}
-      <TemplateView {ctl} version={built.version} cells={targets} onerror={(e) => (tpl.frameError = e)} />
+      <TemplateView {ctl} version={built.version} token={built.token} cells={targets} onerror={(e) => (tpl.frameError = e)} />
     {:else}
       <div class="waiting"><Spinner size={16} /></div>
     {/if}
@@ -474,6 +492,7 @@
 </div>
 </div>
 
+{#if publishing}<PublishDialog {ctl} onclose={() => (publishing = false)} />{/if}
 {#if controlsOpen}
   <VariablesDialog
     {ctl}
@@ -497,10 +516,28 @@
   .kiosk .page {
     padding-top: 1.5rem;
   }
-  select.refresh {
+  :global(.select.refresh) {
     height: 1.625rem;
+  }
+  .pub {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    height: 1.5rem;
+    padding: 0 0.5rem;
+    margin-right: 0.5rem;
     font-size: 0.75rem;
-    padding: 0 0.25rem;
+    color: var(--wb-fg-muted);
+    border: 1px solid var(--wb-border);
+    border-radius: 3px;
+  }
+  .pub:hover {
+    color: var(--wb-fg);
+    background: var(--wb-list-hover);
+  }
+  .pub.changed {
+    color: var(--warning);
+    border-color: color-mix(in srgb, var(--warning) 45%, var(--wb-border));
   }
   .note {
     color: var(--muted);

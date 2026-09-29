@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { api, type AiLevel } from "../lib/api";
   import type { Inspection } from "../lib/conn.svelte";
   import type { NotebookCtl } from "../lib/notebook.svelte";
   import Icon from "./Icon.svelte";
@@ -30,11 +29,6 @@
     return "symbol-string";
   }
   const DECL_ICON: Record<string, string> = { param: "symbol-parameter", let: "symbol-constant", function: "symbol-method" };
-  let aiLevel = $state<AiLevel | null>(null);
-  // re-read when the dialog closes
-  $effect(() => {
-    if (!ctl.ai) api.ai.level(ctl.name).then((r) => (aiLevel = r.level), () => {});
-  });
   let open = $state<Record<string, boolean>>({});
   // basalt answers, by the script that asked: DESCRIBE 'x.csv', SHOW TABLES FROM erp
   let answers = $state<Record<string, Inspection | "loading">>({});
@@ -53,12 +47,6 @@
       return !!a && a !== "loading" && !a.error && catalog(d.name, a).hits.length > 0;
     }),
   );
-  let known = $state<Set<string>>(new Set());
-  $effect(() => {
-    void ctl.secrets; // re-read after the dialog closes
-    api.secrets(ctl.name).then((r) => (known = new Set(r.secrets.map((s) => s.name)))).catch(() => {});
-  });
-  const missingSecrets = $derived([...ctl.secretRefs.keys()].filter((n) => !known.has(n)).length);
   const others = $derived(ctl.conn.declared.filter((d) => d.kind !== "connection" && match(d.name)));
 
   // a connection's catalog can hold thousands of tables: filtered, scrolled, and drawn a page at a time
@@ -208,23 +196,6 @@
     </section>
   {/if}
 
-  <section>
-    {@render head("secrets", "Secrets", "key", missingSecrets ? `${missingSecrets} not set` : "", !!missingSecrets)}
-    {#if !folded.secrets}
-      <button class="col decl entry" onclick={() => (ctl.secrets = true)}>
-        <span class="cname"><Icon name="lock" size={14} />{ctl.secretRefs.size ? `${ctl.secretRefs.size} used by this notebook` : "Manage secrets"}</span><i>Open</i>
-      </button>
-    {/if}
-  </section>
-
-  <section>
-    {@render head("ai", "AI access", "sparkle")}
-    {#if !folded.ai}
-      <button class="col decl entry" onclick={() => (ctl.ai = true)}>
-        <span class="cname"><Icon name="plug" size={14} />{aiLevel === "off" ? "Off" : aiLevel ? `MCP clients can ${aiLevel}` : "MCP clients"}</span><i>Open</i>
-      </button>
-    {/if}
-  </section>
 
   {#if others.length}
     <section>
@@ -419,11 +390,6 @@
     color: var(--accent);
   }
   /* a section's single action row: as tall as a table row */
-  .entry {
-    min-height: 1.75rem;
-    font-family: var(--sans);
-    font-size: 0.8125rem;
-  }
   .empty {
     margin: 2px 0 2px 1.25rem;
     color: var(--muted);

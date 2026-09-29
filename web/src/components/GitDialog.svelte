@@ -95,7 +95,7 @@
           <span>Remote <em>optional</em></span>
           <input class="mono" bind:value={remote} placeholder="git@github.com:you/sales.git" spellcheck="false" />
         </label>
-        {#if https}<p class="hint">An HTTPS remote signs in with a token: add it as the secret <code>GIT_TOKEN</code>.</p>{/if}
+        {#if https}<p class="hint">An HTTPS remote signs in with a token: a connection giving <code>GIT_TOKEN</code> (yours, or the workspace's).</p>{/if}
         {#if error}<p class="error">{error}</p>{/if}
         <div class="buttons">
           <button type="button" class="quiet" onclick={never}>Don't ask for this notebook</button>
@@ -116,7 +116,7 @@
         </label>
         <p class="hint">
           {#if https}
-            HTTPS signs in with the secret <code>GIT_TOKEN</code> (and <code>GIT_USER</code> if your host needs one).
+            HTTPS signs in with <code>GIT_TOKEN</code> (and <code>GIT_USER</code> if your host needs one), from a connection you may use: yours, per person, or the workspace's.
           {:else}
             SSH uses the server's keys. Leave it empty to remove the remote.
           {/if}

@@ -42,23 +42,56 @@ async function runtimeVersion(): Promise<string> {
   return runtimeHash;
 }
 
-/** The version a template's bundle has: its source and the runtime's. */
-export async function templateVersion(source: string): Promise<string> {
-  return new Bun.CryptoHasher("sha1").update(source).update(await runtimeVersion()).digest("hex").slice(0, 16);
+/** npm packages a template may import (its workspace's and notebook's environments, environments.ts):
+ *  their names, the builds' folders to resolve them from (the notebook's first), and what identifies them. */
+export interface TemplatePackages {
+  names: string[];
+  dirs: string[];
+  key: string;
+}
+
+/** The version a template's bundle has: its source, the runtime's, and its packages'. */
+export async function templateVersion(source: string, packages?: TemplatePackages): Promise<string> {
+  return new Bun.CryptoHasher("sha1").update(source).update(await runtimeVersion()).update(packages?.key ?? "").digest("hex").slice(0, 16);
 }
 
 const ALLOWED = /^(svelte(\/.*)?|querier)$/;
+const declared = (spec: string, names: string[]) => names.some((n) => spec === n || spec.startsWith(`${n}/`));
+const allowedList = (names: string[]) => ['"svelte"', '"querier"', ...names.map((n) => `"${n}"`)].join(", ");
 
-/** What the compiled template imports, if it is anything but svelte and querier. */
-function forbidden(js: string): string | null {
+/** What the compiled template imports, if it is anything but svelte, querier and its environment's packages. */
+function forbidden(js: string, names: string[] = []): string | null {
   if (/\bimport\s*\(/.test(js)) return "a template can't import at run time (import())";
+  const ok = (spec: string) => ALLOWED.test(spec) || declared(spec, names);
+  const no = (spec: string) =>
+    names.length
+      ? `a template may import only ${allowedList(names)}, not "${spec}": add it to the environment's template packages`
+      : `a template may import only "svelte" and "querier", not "${spec}"`;
   for (const m of js.matchAll(/\b(?:import|export)\b[^;'"]*?\bfrom\s*(['"])([^'"]+)\1\s*(with|assert)?/g)) {
     if (m[3]) return `a template can't use import attributes (${m[3]} { ... })`;
-    if (!ALLOWED.test(m[2])) return `a template may import only "svelte" and "querier", not "${m[2]}"`;
+    if (!ok(m[2])) return no(m[2]);
   }
-  for (const m of js.matchAll(/\bimport\s*(['"])([^'"]+)\1/g)) if (!ALLOWED.test(m[2])) return `a template may import only "svelte" and "querier", not "${m[2]}"`;
+  for (const m of js.matchAll(/\bimport\s*(['"])([^'"]+)\1/g)) if (!ok(m[2])) return no(m[2]);
   return null;
 }
+
+/** The environment's packages, resolved from their builds; svelte always the server's own (one runtime). */
+const packagesPlugin = (p: TemplatePackages) => ({
+  name: "packages",
+  setup(b: any) {
+    b.onResolve({ filter: /^svelte(\/.*)?$/ }, ({ path }: { path: string }) => ({ path: Bun.resolveSync(path, RUNTIME) }));
+    if (!p.names.length) return;
+    const names = new RegExp(`^(${p.names.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})(/.*)?$`);
+    b.onResolve({ filter: names }, ({ path }: { path: string }) => {
+      for (const dir of p.dirs) {
+        try {
+          return { path: Bun.resolveSync(path, dir) };
+        } catch {}
+      }
+      return undefined;
+    });
+  },
+});
 
 const svelte = {
   name: "svelte",
@@ -78,11 +111,11 @@ const svelte = {
 
 const built = new Map<string, Promise<Built>>();
 
-export function buildTemplate(source: string): Promise<Built> {
-  return templateVersion(source).then((v) => {
+export function buildTemplate(source: string, packages?: TemplatePackages): Promise<Built> {
+  return templateVersion(source, packages).then((v) => {
     let p = built.get(v);
     if (!p) {
-      p = build(source, v);
+      p = build(source, v, packages);
       built.set(v, p);
       if (built.size > 50) built.delete(built.keys().next().value!);
     }
@@ -90,14 +123,14 @@ export function buildTemplate(source: string): Promise<Built> {
   });
 }
 
-async function build(source: string, version: string): Promise<Built> {
+async function build(source: string, version: string, packages?: TemplatePackages): Promise<Built> {
   let js: string;
   try {
     js = compile(source, { filename: "report.svelte", generate: "client", css: "injected" }).js.code;
   } catch (e: any) {
     return { error: { message: e.message?.split("\n")[0] ?? String(e), line: e.start?.line, col: e.start?.column != null ? e.start.column + 1 : undefined } };
   }
-  const no = forbidden(js);
+  const no = forbidden(js, packages?.names);
   if (no) return { error: { message: no } };
 
   // bundled from inside the project, where "svelte" resolves
@@ -109,7 +142,7 @@ async function build(source: string, version: string): Promise<Built> {
       join(dir, "entry.ts"),
       `import { mount } from "svelte";\nimport Report from "./report.js";\nimport { start } from ${JSON.stringify(join(RUNTIME, "runtime.svelte.ts"))};\nstart((target, props) => mount(Report, { target, props }));\n`,
     );
-    const out = await Bun.build({ entrypoints: [join(dir, "entry.ts")], format: "iife", target: "browser", minify: true, plugins: [svelte] });
+    const out = await Bun.build({ entrypoints: [join(dir, "entry.ts")], format: "iife", target: "browser", minify: true, plugins: [svelte, ...(packages ? [packagesPlugin(packages)] : [])] });
     if (!out.success) return { error: { message: out.logs.map(String).join("\n").split("\n")[0] || "the template didn't build" } };
     return { js: await out.outputs[0].text() };
   } catch (e: any) {

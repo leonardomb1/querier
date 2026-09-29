@@ -4,9 +4,11 @@ services:
   querier:
     build: .
     image: querier
+    # the sysadmin (QUERIER_ADMIN_USER, QUERIER_ADMIN_PASSWORD_HASH) and other settings: see .env.example
+    env_file: .env
     ports: ["3000:3000"]
     volumes:
-      - querier-data:/data   # notebooks, and secrets (config/secrets.json, mode 600)
+      - querier-data:/data   # notebooks; config/: connections.json, auth.json, querier.db (sessions, audit), all mode 600
     devices:
       - /dev/kvm             # microVMs need KVM
       - /dev/net/tun         # and a tap each, for the ones allowed a network

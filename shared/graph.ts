@@ -45,6 +45,8 @@ export function freshness(
   sources: Record<string, string>,
   params: Record<string, string>,
   code: Set<string>,
+  /** each cell's source hash, where the source itself isn't known (a published report seen without its code) */
+  hashes?: Record<string, string>,
 ): Record<string, Freshness> {
   const out: Record<string, Freshness> = {};
   for (const name of order) {
@@ -63,7 +65,7 @@ export function freshness(
       : reads.filter((x) => x.startsWith("$")).map((x) => x.slice(1));
     const stale =
       !r.ok ||
-      r.hash !== hash(sources[name] ?? "") ||
+      r.hash !== (hashes?.[name] ?? hash(sources[name] ?? "")) ||
       readsParams.some((p) => (params[p] ?? "") !== (r.params[p] ?? "")) ||
       up[name].some((u) => out[u] !== "fresh" || (ran[u]?.seq ?? Infinity) > r.seq);
     out[name] = stale ? "stale" : "fresh";

@@ -1,44 +1,46 @@
 <script lang="ts">
-  import type { NotebookCtl } from "../../lib/notebook.svelte";
-  import type { View, Workbench } from "../../lib/workbench.svelte";
+  import { session } from "../../lib/session.svelte";
   import Icon from "../Icon.svelte";
-  import Menu from "../Menu.svelte";
+  import Menu, { type MenuItem } from "../Menu.svelte";
 
-  // The activity bar: which view the side bar shows; settings at the bottom.
-  let { ctl, wb }: { ctl: NotebookCtl; wb: Workbench } = $props();
-
-  const changes = $derived((ctl.git?.cells.length ?? 0) + (ctl.git?.files.length ?? 0));
-  const VIEWS: [View, string, string][] = [
-    ["explorer", "files", "Explorer  (Ctrl+Shift+E)"],
-    ["search", "search", "Search  (Ctrl+Shift+F)"],
-    ["scm", "source-control", "Source control  (Ctrl+Shift+G)"],
-    ["data", "database", "Data: tables, files, connections"],
-  ];
+  // The activity bar, the same on every page: which view the side bar shows;
+  // settings at the bottom.
+  let {
+    views,
+    active,
+    onpick,
+    menu,
+  }: {
+    views: { id: string; icon: string; title: string; badge?: number }[];
+    active: string | null;
+    onpick: (id: string) => void;
+    menu: (MenuItem | "-")[];
+  } = $props();
 </script>
 
-<nav class="activity" aria-label="Views">
-  {#each VIEWS as [id, icon, title] (id)}
-    <button class:on={wb.view === id} {title} aria-label={title} aria-pressed={wb.view === id} onclick={() => wb.showView(id)}>
-      <Icon name={icon} size={24} />
-      {#if id === "scm" && changes}<span class="badge">{changes}</span>{/if}
+<nav class="activity" aria-label="Views" style:view-transition-name="wb-activity">
+  {#each views as v (v.id)}
+    <button class:on={active === v.id} title={v.title} aria-label={v.title} aria-pressed={active === v.id} onclick={() => onpick(v.id)}>
+      <Icon name={v.icon} size={24} />
+      {#if v.badge}<span class="badge">{v.badge}</span>{/if}
     </button>
   {/each}
   <span class="spacer"></span>
-  <div class="gear">
-    <Menu
-      icon="settings-gear"
-      title="Settings"
-      items={[
-        { label: "Command palette", hint: "Ctrl+K", run: () => (ctl.palette = true) },
-        "-",
-        { label: "Secrets", run: () => (ctl.secrets = true) },
-        { label: "Sandbox: size and network", run: () => (ctl.sandbox = true) },
-        { label: "AI clients and access (MCP)", run: () => (ctl.ai = true) },
-        "-",
-        { label: "Keyboard shortcuts", hint: "?", run: () => (ctl.help = true) },
-      ]}
-    />
-  </div>
+  <!-- Accounts, as VS Code's: who is signed in, and signing out -->
+  {#if session.me}
+    <div class="gear">
+      <Menu
+        icon="account"
+        title={`${session.me.name ?? session.me.username} (${session.me.sysadmin ? "system administrator" : session.me.provider})`}
+        items={[
+          { label: `${session.me.name ?? session.me.username}${session.me.email ? ` · ${session.me.email}` : ""}`, disabled: false, run: () => {} },
+          "-",
+          { label: "Sign Out", run: () => session.signOut() },
+        ]}
+      />
+    </div>
+  {/if}
+  <div class="gear"><Menu icon="settings-gear" title="Settings" items={menu} /></div>
 </nav>
 
 <style>

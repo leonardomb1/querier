@@ -45,4 +45,22 @@ say(`  169.254.169.254:80 (metadata): ${(await run(n, "d", "python", probe("169.
 say(`  the gateway, i.e. this container, :3000: ${(await run(n, "e", "python", "import socket\ngw = open('/proc/net/route').read().split()[13]\nip = socket.inet_ntoa(bytes.fromhex(gw)[::-1])\n" + probe("x:3000", "ip"))).text}`);
 say(`  no DNS: ${(await run(n, "f", "python", "import socket\ntry:\n    socket.gethostbyname('example.com'); print('resolved')\nexcept Exception as e:\n    print('no DNS:', type(e).__name__)")).text}`);
 await n.close();
+// an environment: packages built for the guest, on a disk of their own; the notebook's slot empty
+{
+  const { Environments } = await import("../server/environments");
+  const { openDb } = await import("../server/auth/db");
+  const root = "/tmp/smoke-env";
+  const envs = new Environments(openDb(":memory:"), { root: `${root}/builds`, images: true });
+  await Bun.write(`${root}/ws/.keep`, "");
+  t = Date.now();
+  envs.apply(`${root}/ws`, "ws:smoke", "python", ["tabulate"], "smoke");
+  let st = await envs.state(`${root}/ws`, "ws:smoke", "python");
+  while (st.status === "building") (await Bun.sleep(200), (st = await envs.state(`${root}/ws`, "ws:smoke", "python")));
+  say(`environment [tabulate]: ${st.status} in ${Date.now() - t}ms${st.log ? `: ${st.log.slice(0, 200)}` : ""}`);
+  const built = envs.python(st.applied?.hash);
+  const e = await runner.open({ notebookDir: demo.dir, packages: { workspace: built, notebook: null } });
+  say(`  import tabulate: ${(await run(e, "t", "python", "import tabulate, sys\nprint(tabulate.__file__.split('/')[:3], [p for p in sys.path if 'env' in p])")).text}`);
+  say(`  the image's own still there: ${(await run(e, "p", "python", "import polars\nprint('polars', polars.__version__)")).text}`);
+  await e.close();
+}
 say("closed; left behind: " + (Bun.spawnSync(["sh", "-c", "ls /var/lib/querier/vms; ip -brief link | grep qfc; nft list map inet querier sessions 2>/dev/null | grep -c jump"]).stdout.toString().trim() || "nothing"));

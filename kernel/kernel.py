@@ -73,6 +73,57 @@ class Wire:
             self.w.flush()
 
 
+# --- metrics ----------------------------------------------------------------
+
+
+def metrics_text(basalt_pid=None):
+    """What this machine and the kernel's processes use, in Prometheus's text
+    exposition format with node_exporter's names: the host scrapes it. Inside a
+    microVM the machine is the VM; run locally, it is the host's."""
+    tck = os.sysconf("SC_CLK_TCK")
+    page = os.sysconf("SC_PAGE_SIZE")
+    lines = []
+
+    def metric(name, kind, help_, samples):
+        lines.append(f"# HELP {name} {help_}")
+        lines.append(f"# TYPE {name} {kind}")
+        for labels, value in samples:
+            lab = ",".join(f'{k}="{v}"' for k, v in labels.items())
+            lines.append(f"{name}{{{lab}}} {value}" if lab else f"{name} {value}")
+
+    modes = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+    cpu = []
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("cpu") and line[3:4].isdigit():
+                parts = line.split()
+                cpu += [({"cpu": parts[0][3:], "mode": m}, int(v) / tck) for m, v in zip(modes, parts[1:9])]
+    metric("node_cpu_seconds_total", "counter", "Seconds the CPUs spent in each mode.", cpu)
+
+    mem = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, _, rest = line.partition(":")
+            mem[key] = int(rest.split()[0]) * 1024
+    for key in ("MemTotal", "MemAvailable", "MemFree", "Buffers", "Cached"):
+        metric(f"node_memory_{key}_bytes", "gauge", f"{key} in /proc/meminfo.", [({}, mem.get(key, 0))])
+
+    cpu_p, rss = [], []
+    for name, pid in (("kernel", os.getpid()), ("basalt", basalt_pid)):
+        if not pid:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            cpu_p.append(({"process": name}, (int(fields[11]) + int(fields[12])) / tck))
+            rss.append(({"process": name}, int(fields[21]) * page))
+        except (OSError, IndexError, ValueError):
+            pass
+    metric("process_cpu_seconds_total", "counter", "CPU time of the kernel's processes.", cpu_p)
+    metric("process_resident_memory_bytes", "gauge", "Resident memory of the kernel's processes.", rss)
+    return "\n".join(lines) + "\n"
+
+
 # --- tables -----------------------------------------------------------------
 
 
@@ -753,6 +804,13 @@ class Kernel:
                 meta, _ = self.wire.read()
                 if meta["op"] == "interrupt":
                     self.interrupt()
+                elif meta["op"] == "metrics":
+                    # answered here, not queued: a scrape must not wait behind a running cell
+                    bk = self.bk.proc.pid if self.bk is not None and self.bk.alive() else None
+                    try:
+                        self.wire.send({"type": "metrics", "id": meta.get("id"), "text": metrics_text(bk)})
+                    except Exception as e:
+                        self.wire.send({"type": "metrics", "id": meta.get("id"), "text": "", "error": str(e)})
                 else:
                     self.jobs.put(meta)
         except (EOFError, OSError):

@@ -7,7 +7,7 @@
 // first frame the host sends carries the session's secrets, which never touch
 // a disk. Network exists only when the notebook allows egress (sandbox-net.ts).
 
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { decodeFrames, encodeFrame } from "./protocol";
 import { SandboxNet } from "./sandbox-net";
@@ -97,7 +97,23 @@ export class FirecrackerRunner implements Runner {
     this.user = o.user ?? (process.getuid?.() === 0 ? "fc" : null);
   }
 
-  async open({ notebookDir, env, sandbox }: OpenOptions): Promise<Session> {
+  private empty?: Promise<string>;
+  /** An empty disk for an environment slot a VM has nothing for (made once, readable by the VMs' user). */
+  private emptyImage(): Promise<string> {
+    this.empty ??= (async () => {
+      const img = join(this.workRoot, "empty-env.ext4");
+      if (await Bun.file(img).exists()) return img;
+      const src = join(this.workRoot, "empty-env");
+      await mkdir(src, { recursive: true });
+      await sh(["mkfs.ext4", "-q", "-L", "env", "-d", src, `${img}.tmp`, "4M"]);
+      await sh(["chmod", "0644", `${img}.tmp`]);
+      await rename(`${img}.tmp`, img);
+      return img;
+    })();
+    return this.empty;
+  }
+
+  async open({ notebookDir, env, sandbox, packages }: OpenOptions): Promise<Session> {
     const id = `vm-${crypto.randomUUID().slice(0, 8)}`;
     const dir = join(this.workRoot, id);
     await mkdir(dir, { recursive: true });
@@ -149,6 +165,14 @@ export class FirecrackerRunner implements Runner {
         drives: [
           { drive_id: "root", path_on_host: this.rootfs, is_root_device: true, is_read_only: true },
           { drive_id: "notebook", path_on_host: join(dir, "notebook.ext4"), is_root_device: false, is_read_only: true },
+          // the environment's packages (/dev/vdc the workspace's, /dev/vdd the notebook's): the init mounts
+          // them and puts them on the kernel's path; drives are positional, so a slot without one gets an empty disk
+          ...(packages?.workspace || packages?.notebook
+            ? [
+                { drive_id: "env-ws", path_on_host: packages.workspace?.image ?? (await this.emptyImage()), is_root_device: false, is_read_only: true },
+                { drive_id: "env-nb", path_on_host: packages.notebook?.image ?? (await this.emptyImage()), is_root_device: false, is_read_only: true },
+              ]
+            : []),
         ],
         "machine-config": { vcpu_count: sandbox?.vcpus ?? 2, mem_size_mib: sandbox?.memory ?? 2048 },
         vsock: { guest_cid: 3, uds_path: join(dir, "v.sock") },
@@ -203,6 +227,8 @@ export class FirecrackerRunner implements Runner {
       });
       session.info.sandbox = "firecracker";
       session.info.egress = (sandbox?.egress ?? []).join(", ");
+      session.info.vcpus = String(config["machine-config"].vcpu_count);
+      session.info.memory = String(config["machine-config"].mem_size_mib);
       return session;
     } catch (e) {
       await cleanup();

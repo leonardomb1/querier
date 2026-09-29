@@ -3,8 +3,8 @@
 // along. Stateless Streamable HTTP: one McpServer per request.
 //
 // Every call is checked against the notebook's access level (access.ts).
-// Secrets never leave: kernels get them as environment variables, and whatever
-// a cell prints is masked on the way out, as it is for the browser.
+// Credentials never leave: kernels get their owner's connections as environment
+// variables, and whatever a cell prints is masked on the way out, as it is for the browser.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolve } from "node:path";
@@ -16,27 +16,43 @@ import type { Lang } from "../notebook";
 import { NotFound, UserError, type Store } from "../store";
 import { checkCli } from "../check";
 import { buildTemplate } from "../template";
-import { allows, type Access, type ClientInfo, type Level } from "./access";
+import { allows, LEVELS, type Access, type ClientInfo, type Level } from "./access";
 import { renderEvents, type Content } from "./render";
 
 export interface Ctx {
   store: Store;
   access: Access;
-  /** The notebook's host, opened if need be (it doesn't start a kernel). */
+  /** The token owner's host of the notebook (their own kernel), opened if need be (it doesn't start a kernel). */
   host(nb: string): Host;
+  /** The npm packages the notebook's templates may import (its environments). */
+  templatePackages?(nb: string): Promise<import("../template").TemplatePackages>;
+  /** Everyone's hosts of the notebook: a cell renamed or deleted reaches each kernel. */
+  hosts(nb: string): Host[];
   /** The notebook's files changed: open tabs reload them. */
   changed(nb: string): void;
+  /** May the token's owner do `action` to notebook `nb` (their roles, shares and policies)? */
+  may(nb: string, action: "notebook.view" | "notebook.readCode" | "notebook.run" | "notebook.edit"): Promise<boolean>;
 }
+
+/** What the owner may do in a notebook, as an AI level: the most a token of theirs can reach there. */
+async function ownerLevel(ctx: Ctx, nb: string): Promise<Level> {
+  if (await ctx.may(nb, "notebook.edit")) return "edit";
+  if (await ctx.may(nb, "notebook.run")) return "run";
+  if ((await ctx.may(nb, "notebook.view")) && (await ctx.may(nb, "notebook.readCode"))) return "read";
+  return "off";
+}
+/** The lower of two levels. */
+const lower = (a: Level, b: Level): Level => (LEVELS.indexOf(a) < LEVELS.indexOf(b) ? a : b);
 
 const INSTRUCTIONS = `Querier is a BI notebook on basalt, a SQL-driven data engine.
 
-A notebook is a folder of cells run in order: SQL (basalt's dialect), Python (polars) and Markdown.
+Notebooks live in workspaces (folders of notebooks that share connections, sandbox defaults and an AI access default); a notebook's id is "workspace/notebook". A notebook is a folder of cells run in order: SQL (basalt's dialect), Python (polars) and Markdown.
 - A SQL cell's result is a table named after the cell; later SQL cells read it with FROM <cell>, and Python cells see it as a polars DataFrame of that name.
 - A Python cell's DataFrames (and its last expression, named after the cell) are tables later SQL cells can query by name.
 - CREATE CONNECTION, PARAM and LET in a SQL cell hold for every later cell. $name reads a PARAM.
 - Running a cell first runs the stale cells it depends on.
 - basalt SQL is not standard SQL (PUSHDOWN, conn.QUERY($$...$$), IDENTIFIER(), LOAD INTO, FOR EACH ROW OF, ...). Call basalt_reference before writing non-trivial SQL, and check_sql before saving it.
-- Credentials are Secrets, handed to the kernel as environment variables: a connection named sr reads SR_USER / SR_PASS, OPTIONS can say token = env('GH_TOKEN'), Python reads os.environ. Never write a password into a cell, and never ask for one; ask the user to add a secret in Querier.
+- Credentials are Connections, handed to the kernel as environment variables (those the token's owner may use, with their own credentials where a connection is per person): a connection named sr reads SR_USER / SR_PASS, OPTIONS can say token = env('GH_TOKEN'), Python reads os.environ. Never write a password into a cell, and never ask for one; ask the user to add a connection in Querier (or, for a per-person one, to enter their own credentials there).
 - Each notebook has an AI access level set by its owner: read (code, dependencies, schemas, errors; no rows), run (also runs cells and queries and sees results), edit (also changes cells and the report). A call beyond it fails; say so rather than working around it.
 - A report can instead be a Svelte 5 template (write_report_template), for layouts the blocks can't express: KPI tiles, custom HTML around the cells' outputs.
 - Every notebook is also a report: its cells in order with code hidden, markdown as prose, and controls for its PARAMs. By default it shows markdown and the cells no other cell reads; set_report lays it out as blocks: any order, widths in twelfths, the parts of a cell's output to show, titles, and text of the report's own. Charts are Altair in Python cells. An Altair selection named after a PARAM (alt.selection_point(name="region", fields=["region"])) sets that PARAM when clicked in the report.`;
@@ -83,10 +99,13 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
   async function open(nb: string, need: Exclude<Level, "off">, tool: string) {
     store.dir(nb); // validates the name
     const have = await access.level(nb);
-    if (have === "off") throw new Denied(`There is no notebook \`${nb}\` available to AI clients.`);
+    const mine = await ownerLevel(ctx, nb);
+    // the token's owner can't see it either: it doesn't exist, as far as this client knows
+    if (have === "off" || mine === "off") throw new Denied(`There is no notebook \`${nb}\` available to this client.`);
     if (!allows(have, need))
       throw new Denied(`\`${tool}\` needs ${need} access to \`${nb}\`, which has ${have}. Its owner can change that in Querier (notebook menu → AI access).`);
-    return have;
+    if (!allows(mine, need)) throw new Denied(`\`${tool}\` needs ${need} access to \`${nb}\`; this token's owner has ${mine} there.`);
+    return lower(have, mine);
   }
 
   // every handler: failures come back as tool errors the model can read
@@ -116,7 +135,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
       }) as any,
     );
 
-  const nbArg = z.string().describe("Notebook name (its folder), as list_notebooks gives it.");
+  const nbArg = z.string().describe('Notebook id, "workspace/notebook", as list_notebooks gives it.');
   const paramsArg = z.record(z.string(), z.string()).optional().describe("PARAM values by name; unset ones take their DEFAULT.");
 
   // -- reading
@@ -128,10 +147,11 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
     async () => {
       const lines: string[] = [];
       for (const n of await store.list()) {
-        const level = await access.level(n.name);
+        // what this client may reach: the notebook's AI level, and no more than its owner
+        const level = lower(await access.level(n.id), await ownerLevel(ctx, n.id));
         if (level === "off") continue;
         lines.push(
-          `- ${n.name}: ${n.title}${n.description ? ` — ${n.description}` : ""} (${n.sql} SQL, ${n.python} Python, ${n.text} text; access: ${level})${n.problem ? ` [does not load: ${n.problem}]` : ""}`,
+          `- ${n.id}: ${n.title}${n.description ? ` — ${n.description}` : ""} (${n.sql} SQL, ${n.python} Python, ${n.text} text; access: ${level})${n.problem ? ` [does not load: ${n.problem}]` : ""}`,
         );
       }
       return text(lines.length ? lines.join("\n") : "No notebooks are available to AI clients.");
@@ -443,7 +463,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
     async ({ notebook, cell, to }) => {
       await open(notebook, "edit", "rename_cell");
       const updated = await store.rename(notebook, cell, to);
-      await ctx.host(notebook).renamed(cell, to);
+      for (const h of ctx.hosts(notebook)) await h.renamed(cell, to);
       ctx.changed(notebook);
       return text(`Renamed \`${cell}\` to \`${to}\`${updated.length ? `; updated ${updated.join(", ")}` : ""}.`);
     },
@@ -474,7 +494,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
     async ({ notebook, cell }) => {
       await open(notebook, "edit", "delete_cell");
       await store.remove(notebook, cell);
-      await ctx.host(notebook).removed(cell);
+      for (const h of ctx.hosts(notebook)) await h.removed(cell);
       ctx.changed(notebook);
       return text(`Deleted \`${cell}\`.`);
     },
@@ -488,7 +508,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
       await open(notebook, "read", "read_report_template");
       const source = await store.template(notebook);
       if (source == null) return text("This notebook has no report template; its report is laid out as blocks (set_report).");
-      const b = await buildTemplate(source);
+      const b = await buildTemplate(source, await ctx.templatePackages?.(notebook));
       return text(`${b.error ? `It doesn't build: ${b.error.line ? `line ${b.error.line}${b.error.col ? `:${b.error.col}` : ""}: ` : ""}${b.error.message}\n\n` : ""}\`\`\`svelte\n${source}\n\`\`\``);
     },
   );
@@ -513,7 +533,7 @@ The app's theme is there as CSS variables (--ink, --ink-2, --muted, --surface, -
       const book = await store.load(notebook);
       if (book.report?.view === "blocks") await store.settings(notebook, { report: { ...book.report, view: "template" } });
       ctx.changed(notebook);
-      const b = await buildTemplate(source);
+      const b = await buildTemplate(source, await ctx.templatePackages?.(notebook));
       return b.error
         ? fail(`Saved, but it doesn't build: ${b.error.line ? `line ${b.error.line}${b.error.col ? `:${b.error.col}` : ""}: ` : ""}${b.error.message}`)
         : text(`Saved report.svelte; it builds, and the report shows it.`);

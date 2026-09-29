@@ -25,6 +25,16 @@
     md: ["markdown", "var(--wb-fg-muted)"],
   };
   const openTab = (t: Tab) => wb.open(t);
+  // a row dragged into the editor area opens there: in a group, or beside one
+  const drag = (t: Tab) => ({
+    draggable: true,
+    ondragstart: (e: DragEvent) => {
+      wb.drag = { tab: t, from: null, index: -1 };
+      e.dataTransfer!.setData("application/x-querier-tab", tabKey(t));
+      e.dataTransfer!.effectAllowed = "copyMove";
+    },
+    ondragend: () => (wb.drag = null),
+  });
   const running = (c: string) => ["running", "queued"].includes(ctl.conn.runs[c]?.state ?? "");
 
   async function add(lang: Lang) {
@@ -38,17 +48,19 @@
 <div class="view">
   <header class="title">
     <span>Explorer</span>
-    <span class="tools">
-      <Menu
-        icon="new-file"
-        title="New cell"
-        items={[
-          { label: "New SQL cell", run: () => add("sql") },
-          { label: "New Python cell", run: () => add("python") },
-          { label: "New Markdown cell", run: () => add("md") },
-        ]}
-      />
-    </span>
+    {#if ctl.mayEdit}
+      <span class="tools">
+        <Menu
+          icon="new-file"
+          title="New cell"
+          items={[
+            { label: "New SQL cell", run: () => add("sql") },
+            { label: "New Python cell", run: () => add("python") },
+            { label: "New Markdown cell", run: () => add("md") },
+          ]}
+        />
+      </span>
+    {/if}
   </header>
 
   <button class="section" onclick={() => (open.files = !open.files)} aria-expanded={open.files}>
@@ -57,16 +69,16 @@
   </button>
   {#if open.files}
     <div class="tree" role="tree">
-      <button class="row" class:active={activeKey === "notebook"} onclick={() => openTab({ kind: "notebook" })} role="treeitem" aria-selected={activeKey === "notebook"}>
+      <button class="row" {...drag({ kind: "notebook" })} class:active={activeKey === "notebook"} onclick={() => openTab({ kind: "notebook" })} role="treeitem" aria-selected={activeKey === "notebook"}>
         <span class="ic" style:color="var(--wb-accent)"><Icon name="notebook" size={16} /></span>
         <span class="name">Notebook</span><span class="hint">all cells</span>
       </button>
-      <button class="row" class:active={activeKey === "report"} onclick={() => openTab({ kind: "report" })} role="treeitem" aria-selected={activeKey === "report"}>
+      <button class="row" {...drag({ kind: "report" })} class:active={activeKey === "report"} onclick={() => openTab({ kind: "report" })} role="treeitem" aria-selected={activeKey === "report"}>
         <span class="ic" style:color="var(--wb-accent)"><Icon name="preview" size={16} /></span>
         <span class="name">Report</span>
       </button>
       {#if ctl.book?.template != null}
-        <button class="row" class:active={activeKey === "template"} onclick={() => openTab({ kind: "template" })} role="treeitem" aria-selected={activeKey === "template"}>
+        <button class="row" {...drag({ kind: "template" })} class:active={activeKey === "template"} onclick={() => openTab({ kind: "template" })} role="treeitem" aria-selected={activeKey === "template"}>
           <span class="ic" style:color="var(--wb-lang-svelte)"><Icon name="file-code" size={16} /></span>
           <span class="name">report.svelte</span>
         </button>
@@ -77,12 +89,12 @@
         {@const key = `cell:${c.name}`}
         {@const problems = ctl.marksFor(c.name).filter((m) => m.severity !== "warning").length}
         <div class="row cell" class:active={activeKey === key} role="treeitem" aria-selected={activeKey === key}>
-          <button class="open" onclick={() => openTab({ kind: "cell", cell: c.name })} title="{c.file} — open">
+          <button class="open" {...drag({ kind: "cell", cell: c.name })} onclick={() => openTab({ kind: "cell", cell: c.name })} title="{c.file} — open">
             <span class="ic" style:color={color}><Icon name={icon} size={16} /></span>
             <span class="name" class:bad={problems > 0}>{c.file}</span>
             {#if ctl.fresh[c.name] === "stale" && c.lang !== "md"}<span class="stale" title="Outdated: its code or what it reads changed">●</span>{/if}
           </button>
-          {#if c.lang !== "md"}
+          {#if c.lang !== "md" && ctl.mayRun}
             <button class="inline" title={running(c.name) ? "Running…" : `Run ${c.name}`} aria-label="Run {c.name}" onclick={() => ctl.run([c.name])}>
               <Icon name={running(c.name) ? "loading" : "play"} size={15} spin={running(c.name)} />
             </button>

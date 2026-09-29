@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./ui/Select.svelte";
   import type { Report } from "../lib/api";
   import type { Output } from "../lib/conn.svelte";
   import { arrowTable, formatter } from "../lib/format";
@@ -38,6 +39,12 @@
     }
     return [...seen];
   }
+  /** The empty choice: a PARAM defaulting to '' means "no filter", so it reads "All". */
+  function defaultLabel(d: string | undefined): string {
+    if (d == null) return "Choose…";
+    const v = d.replace(/^'(.*)'$/s, "$1");
+    return v === "" ? "All" : `Default (${v})`;
+  }
 </script>
 
 <div class="vars">
@@ -48,11 +55,17 @@
     <label class="var" title="{p.type}, declared in {p.cell}">
       <span>{p.name}</span>
       {#if options}
-        <select {value} onchange={(e) => ctl.setParam(p.name, e.currentTarget.value)}>
-          <option value="">{p.default != null ? `Default (${p.default})` : "Choose…"}</option>
-          {#each options as o}<option value={o}>{o}</option>{/each}
-          {#if value && !options.includes(value)}<option {value}>{value}</option>{/if}
-        </select>
+        <Select
+          {value}
+          compact
+          label={p.name}
+          options={[
+            { value: "", label: defaultLabel(p.default) },
+            ...options.map((o) => ({ value: o, label: o })),
+            ...(value && !options.includes(value) ? [{ value, label: value }] : []),
+          ]}
+          onchange={(v) => ctl.setParam(p.name, v)}
+        />
       {:else}
         <input placeholder={p.default ?? "required"} {value} oninput={(e) => ctl.setParam(p.name, e.currentTarget.value)} size={Math.max(4, (value || p.default || "").length + 1)} />
       {/if}
@@ -90,7 +103,7 @@
     border-right: 1px solid var(--hair);
   }
   .var input,
-  .var select {
+  .var :global(.select) {
     border: 0;
     border-radius: 0;
     height: 100%;
@@ -99,7 +112,7 @@
     background: none;
   }
   .var input:focus,
-  .var select:focus {
+  .var :global(.select:focus-visible) {
     outline: none;
   }
   .clear {

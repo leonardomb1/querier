@@ -6,7 +6,8 @@ const api = `http://localhost:${process.env.PORT ?? 3000}`;
 export default defineConfig({
   root: import.meta.dirname,
   plugins: [svelte()],
-  build: { outDir: "dist", emptyOutDir: true, chunkSizeWarningLimit: 2000 },
+  // Monaco (the code editor, lib/monaco.ts) is one large chunk, loaded when an editor first opens
+  build: { outDir: "dist", emptyOutDir: true, chunkSizeWarningLimit: 4000 },
   server: {
     proxy: {
       "/api": api,

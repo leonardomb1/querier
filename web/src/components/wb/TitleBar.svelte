@@ -1,27 +1,29 @@
 <script lang="ts">
-  import type { NotebookCtl } from "../../lib/notebook.svelte";
-  import type { Workbench } from "../../lib/workbench.svelte";
+  import type { Snippet } from "svelte";
   import Icon from "../Icon.svelte";
 
-  // The title bar: where you are, the command center (the palette), the layout toggles.
-  let { ctl, wb }: { ctl: NotebookCtl; wb: Workbench } = $props();
+  // The title bar, the same on every page: where you are (querier › workspace ›
+  // notebook), the command center (the palette), and the page's layout toggles.
+  let {
+    crumbs = [],
+    center,
+    oncenter,
+    children,
+  }: { crumbs?: { label: string; href?: string; title?: string }[]; center: string; oncenter: () => void; children?: Snippet } = $props();
 </script>
 
-<header class="titlebar">
-  <nav class="crumbs">
-    <a href="#/" title="All notebooks"><Icon name="notebook" size={16} /><span>querier</span></a>
+<header class="titlebar" style:view-transition-name="wb-title">
+  <nav class="crumbs" aria-label="Where you are">
+    <a href="#/" title="All workspaces" class="home"><Icon name="notebook" size={16} /><span>querier</span></a>
+    {#each crumbs as c, i (i)}
+      <span class="sep"><Icon name="chevron-right" size={12} /></span>
+      {#if c.href}<a href={c.href} title={c.title}>{c.label}</a>{:else}<span class="here" title={c.title}>{c.label}</span>{/if}
+    {/each}
   </nav>
-  <button class="center" onclick={() => (ctl.palette = true)} title="Commands, cells and notebooks  (Ctrl+K)">
-    <Icon name="search" size={14} /><span>{ctl.book?.title ?? ctl.name}</span>
+  <button class="center" onclick={oncenter} title="Commands, notebooks and workspaces  (Ctrl+K)">
+    <Icon name="search" size={14} /><span>{center}</span>
   </button>
-  <div class="layout">
-    <button class="icon" class:on={wb.view != null} title="Toggle the side bar  (Ctrl+B)" aria-label="Toggle the side bar" onclick={() => ((wb.view = wb.view ? null : "explorer"), wb.save())}>
-      <Icon name={wb.view ? "layout-sidebar-left" : "layout-sidebar-left-off"} size={16} />
-    </button>
-    <button class="icon" class:on={wb.panel} title="Toggle the panel  (Ctrl+J)" aria-label="Toggle the panel" onclick={() => wb.togglePanel()}>
-      <Icon name={wb.panel ? "layout-panel" : "layout-panel-off"} size={16} />
-    </button>
-  </div>
+  <div class="layout">{@render children?.()}</div>
 </header>
 
 <style>
@@ -38,8 +40,26 @@
     font-size: 0.8125rem;
     user-select: none;
   }
+  .crumbs {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    min-width: 0;
+    white-space: nowrap;
+  }
+  .sep {
+    display: flex;
+    color: var(--wb-fg-dim);
+  }
+  .here {
+    color: var(--wb-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .crumbs a {
     display: inline-flex;
+    padding: 0 0.25rem;
+    border-radius: 4px;
     align-items: center;
     gap: 0.375rem;
     color: var(--wb-fg-muted);
@@ -47,6 +67,13 @@
   }
   .crumbs a:hover {
     color: var(--wb-fg);
+    background: var(--wb-list-hover);
+  }
+  .crumbs a.home {
+    padding-left: 0;
+  }
+  .crumbs a.home:hover {
+    background: none;
   }
   .center {
     display: flex;
@@ -73,13 +100,13 @@
     display: flex;
     gap: 2px;
   }
-  .layout button {
+  .layout :global(button) {
     width: 1.625rem;
     height: 1.625rem;
     color: var(--wb-fg-muted);
     border-radius: 5px;
   }
-  .layout button.on {
+  .layout :global(button.on) {
     color: var(--wb-fg);
   }
 </style>

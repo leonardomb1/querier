@@ -3,25 +3,28 @@
   import type { Notebook } from "../../lib/api";
   import { NotebookCtl } from "../../lib/notebook.svelte";
   import { TemplateCtl } from "../../lib/template.svelte";
-  import { Workbench } from "../../lib/workbench.svelte";
-  import AiDialog from "../AiDialog.svelte";
+  import { adminHref, wsHref } from "../../lib/href";
+  import { session } from "../../lib/session.svelte";
+  import { Workbench, type View } from "../../lib/workbench.svelte";
   import CommitDialog from "../CommitDialog.svelte";
   import GitDialog from "../GitDialog.svelte";
   import Help from "../Help.svelte";
   import Icon from "../Icon.svelte";
   import GitGraph from "../GitGraph.svelte";
   import Palette from "../Palette.svelte";
-  import SandboxDialog from "../SandboxDialog.svelte";
-  import SecretsDialog from "../SecretsDialog.svelte";
   import Sidebar from "../Sidebar.svelte";
   import SourceControl from "../SourceControl.svelte";
   import ActivityBar from "./ActivityBar.svelte";
-  import EditorGroup from "./EditorGroup.svelte";
+  import EditorGrid from "./EditorGrid.svelte";
+  import SandboxPanel from "./SandboxPanel.svelte";
+  import { sidebar } from "../../lib/sidebar.svelte";
   import ExplorerView from "./ExplorerView.svelte";
   import Panel from "./Panel.svelte";
   import SearchView from "./SearchView.svelte";
   import StatusBar from "./StatusBar.svelte";
   import TitleBar from "./TitleBar.svelte";
+  import ManageAccess from "../auth/ManageAccess.svelte";
+  import CredentialsDialog from "../connections/CredentialsDialog.svelte";
 
   // A notebook's workbench, VS Code's: activity bar, side bar, editors in tabs
   // (the notebook, each cell as a file, the report, report.svelte), a panel with
@@ -34,6 +37,8 @@
   const tpl = new TemplateCtl(ctl);
   // svelte-ignore state_referenced_locally
   const wb = new Workbench(name);
+  const workspace = $derived(name.split("/")[0]);
+  const changes = $derived((ctl.git?.cells.length ?? 0) + (ctl.git?.files.length ?? 0));
   onDestroy(() => ctl.close());
   onMount(() => {
     if (open === "report") wb.open({ kind: "report" });
@@ -42,6 +47,13 @@
   });
 
   $effect(() => tpl.sync(ctl.book?.template));
+  // "open the settings there", asked from anywhere (a cell, the status bar, the palette)
+  $effect(() => {
+    const s = ctl.settings;
+    if (!s) return;
+    ctl.settings = null;
+    wb.openSettings(s.scope, s.section ?? null);
+  });
   // check every SQL cell once the page knows the notebook, and whenever what it defines or holds changes
   $effect(() => {
     void ctl.conn.tables;
@@ -56,22 +68,42 @@
   let gitSettings = $state(false);
   let scmOpen = $state({ changes: true, history: true });
 
-  // -- sashes: the side bar's width, the groups' split, the panel's height
-  let dragging = $state<"side" | "split" | "panel" | null>(null);
+  // -- sashes: the side bar's width, the panel's size (the groups' are the grid's own).
+  // Dragged small enough, the side bar and the panel snap closed, as in VS Code;
+  // dragged back out, they open again.
+  let dragging = $state<"side" | "panel" | "grid" | null>(null);
   let editorsEl = $state<HTMLDivElement>();
-  function drag(e: PointerEvent, what: "side" | "split" | "panel") {
+  const SNAP = 100;
+  function drag(e: PointerEvent, what: "side" | "panel") {
     if (e.button !== 0) return;
     e.preventDefault();
     dragging = what;
     const box = editorsEl!.getBoundingClientRect();
+    const lastView = wb.view ?? "explorer";
     const move = (ev: PointerEvent) => {
-      if (what === "side") wb.sideWidth = Math.min(600, Math.max(170, ev.clientX - 48));
-      else if (what === "split") wb.split = Math.min(0.8, Math.max(0.2, (ev.clientX - box.left) / box.width));
-      else wb.panelHeight = Math.min(box.bottom - box.top - 120, Math.max(90, box.bottom - ev.clientY));
+      if (what === "side") {
+        const w = ev.clientX - 48;
+        if (w < SNAP) wb.view = null;
+        else {
+          wb.view ??= lastView;
+          sidebar.set(w);
+        }
+        return;
+      }
+      const right = wb.panelPosition === "right";
+      const size = right ? box.right - ev.clientX : box.bottom - ev.clientY;
+      const room = (right ? box.width : box.height) - 160;
+      if (size < SNAP) wb.panel = false;
+      else {
+        wb.panel = true;
+        if (right) wb.panelWidth = Math.min(room, Math.max(220, size));
+        else wb.panelHeight = Math.min(room, Math.max(90, size));
+      }
     };
     const up = () => {
       dragging = null;
       wb.save();
+      sidebar.save();
       removeEventListener("pointermove", move);
       removeEventListener("pointerup", up);
     };
@@ -92,18 +124,57 @@
     if (e.shiftKey && k === "g") return act(() => wb.showView("scm"));
     if (!e.shiftKey && k === "b") return act(() => ((wb.view = wb.view ? null : "explorer"), wb.save()));
     if (!e.shiftKey && k === "j") return act(() => wb.togglePanel());
-    if (e.key === "\\") return act(() => wb.splitRight());
+    if (e.key === "\\") return act(() => wb.split(e.altKey ? "down" : "right"));
+    if (e.key === ",") return act(() => wb.openSettings());
   }
 </script>
 
-<svelte:window {onkeydown} />
+<!-- in the capture phase: before an editor (Monaco) takes the keys it also binds, as Ctrl+K -->
+<svelte:window onkeydowncapture={onkeydown} />
 
-<div class="workbench" class:dragging style:--side="{wb.sideWidth}px">
-  <TitleBar {ctl} {wb} />
+<div class="workbench" class:dragging={!!dragging || !!wb.drag} style:--side="{sidebar.width}px">
+  <TitleBar
+    crumbs={[
+      { label: workspace, href: wsHref(workspace), title: `The workspace ${workspace}` },
+      { label: ctl.book?.title ?? ctl.name, title: ctl.name },
+    ]}
+    center={ctl.book?.title ?? ctl.name}
+    oncenter={() => (ctl.palette = true)}
+  >
+    {#if ctl.may("notebook.share")}
+      <button class="icon" title="Share this notebook" aria-label="Share this notebook" onclick={() => (ctl.sharing = true)}>
+        <Icon name="person-add" size={16} />
+      </button>
+    {/if}
+    <button class="icon" class:on={wb.view != null} title="Toggle the side bar  (Ctrl+B)" aria-label="Toggle the side bar" onclick={() => ((wb.view = wb.view ? null : "explorer"), wb.save())}>
+      <Icon name={wb.view ? "layout-sidebar-left" : "layout-sidebar-left-off"} size={16} />
+    </button>
+    <button class="icon" class:on={wb.panel} title="Toggle the panel  (Ctrl+J)" aria-label="Toggle the panel" onclick={() => wb.togglePanel()}>
+      <Icon name={wb.panel ? "layout-panel" : "layout-panel-off"} size={16} />
+    </button>
+  </TitleBar>
   <div class="main">
-    <ActivityBar {ctl} {wb} />
+    <ActivityBar
+      views={[
+        { id: "explorer", icon: "files", title: "Explorer  (Ctrl+Shift+E)" },
+        { id: "search", icon: "search", title: "Search  (Ctrl+Shift+F)" },
+        { id: "scm", icon: "source-control", title: "Source control  (Ctrl+Shift+G)", badge: changes },
+        { id: "data", icon: "database", title: "Data: tables, files, connections" },
+      ]}
+      active={wb.view}
+      onpick={(v) => wb.showView(v as View)}
+      menu={[
+        { label: "Command Palette…", hint: "Ctrl+K", run: () => (ctl.palette = true) },
+        "-",
+        { label: "Settings", hint: "Ctrl+,", run: () => wb.openSettings() },
+        { label: "Keyboard Shortcuts", hint: "?", run: () => (ctl.help = true) },
+        "-",
+        { label: "AI Clients (MCP)", run: () => wb.openSettings("user", "clients") },
+        ...(session.can("admin.manage") ? ["-" as const, { label: "Administration", run: () => (location.hash = adminHref()) }] : []),
+      ]}
+    />
     {#if wb.view}
-      <aside class="sidebar">
+      <aside class="sidebar" style:view-transition-name="wb-side">
         {#if wb.view === "explorer"}
           <ExplorerView {ctl} {wb} />
         {:else if wb.view === "search"}
@@ -133,35 +204,43 @@
         {/if}
       </aside>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="sash v" onpointerdown={(e) => drag(e, "side")} ondblclick={() => ((wb.sideWidth = 260), wb.save())}></div>
+      <div class="sash v" onpointerdown={(e) => drag(e, "side")} ondblclick={() => sidebar.reset()}></div>
     {/if}
-    <div class="editors" bind:this={editorsEl}>
-      <div class="groups" style:grid-template-columns={wb.groups.length > 1 ? `${wb.split}fr 4px ${1 - wb.split}fr` : "1fr"}>
-        {#each wb.groups as _, i (i)}
-          {#if i > 0}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="sash v between" onpointerdown={(e) => drag(e, "split")} ondblclick={() => ((wb.split = 0.5), wb.save())}></div>
-          {/if}
-          <EditorGroup {ctl} {wb} {tpl} index={i} />
-        {/each}
+    <div class="editors" class:right={wb.panelPosition === "right"} class:max={wb.panel && wb.panelMax} bind:this={editorsEl}>
+      <div class="grid-wrap">
+        <EditorGrid {ctl} {wb} {tpl} ondragging={(on) => (dragging = on ? "grid" : null)} />
       </div>
       {#if wb.panel}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="sash h" onpointerdown={(e) => drag(e, "panel")}></div>
-        <div class="panel" style:height="{wb.panelHeight}px"><Panel {ctl} {wb} {tpl} /></div>
+        <div class="sash {wb.panelPosition === 'right' ? 'v' : 'h'}" onpointerdown={(e) => drag(e, "panel")}></div>
+        <div class="panel" style:height={wb.panelPosition === "bottom" && !wb.panelMax ? `${wb.panelHeight}px` : null} style:width={wb.panelPosition === "right" && !wb.panelMax ? `${wb.panelWidth}px` : null}>
+          <Panel {ctl} {wb} {tpl} />
+        </div>
       {/if}
     </div>
   </div>
   <StatusBar {ctl} {wb} {tpl} />
 </div>
 
-{#if ctl.palette}<Palette {ctl} {wb} />{/if}
+{#if ctl.palette}<Palette {ctl} {wb} onclose={() => (ctl.palette = false)} />{/if}
 {#if ctl.help}<Help onclose={() => (ctl.help = false)} />{/if}
-{#if ctl.secrets}<SecretsDialog {ctl} />{/if}
-{#if ctl.sandbox}<SandboxDialog {ctl} onclose={() => (ctl.sandbox = false)} />{/if}
-{#if ctl.ai}<AiDialog {ctl} onclose={() => (ctl.ai = false)} />{/if}
+{#if ctl.sandboxPanel}<SandboxPanel {ctl} {wb} onclose={() => (ctl.sandboxPanel = false)} />{/if}
 {#if ctl.gitPrompt || gitSettings}
   <GitDialog {ctl} onclose={() => ((ctl.gitPrompt = false), (gitSettings = false))} />
+{/if}
+{#if ctl.sharing}
+  <ManageAccess what={{ scope: "notebook", target: ctl.name, title: ctl.book?.title ?? ctl.name }} onclose={() => (ctl.sharing = false)} />
+{/if}
+{#if ctl.enteringCredentials}
+  <CredentialsDialog
+    connection={ctl.enteringCredentials}
+    onsaved={() => {
+      ctl.enteringCredentials = null;
+      ctl.refreshConnections();
+      ctl.say(ctl.conn.session === "ready" ? "Saved. Restart the kernel for it to get them." : "Saved: your kernel gets them when it starts.");
+    }}
+    onclose={() => (ctl.enteringCredentials = null)}
+  />
 {/if}
 {#if wb.commit}<CommitDialog {ctl} hash={wb.commit} onclose={() => (wb.commit = null)} />{/if}
 
@@ -226,25 +305,28 @@
   .dragging .sash {
     background: var(--wb-accent);
   }
-  .sash.v.between {
-    width: 4px;
-    background: var(--wb-border);
-    background-clip: content-box;
-    padding: 0 1.5px;
-  }
-  .sash.v.between:hover {
-    background-color: var(--wb-accent);
-  }
   .editors {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
   }
-  .groups {
+  .editors.right {
+    flex-direction: row;
+  }
+  .grid-wrap {
     flex: 1;
+    min-width: 0;
     min-height: 0;
-    display: grid;
+    display: flex;
+  }
+  /* the panel maximized: the editors stay mounted, out of sight */
+  .editors.max .grid-wrap,
+  .editors.max > .sash {
+    display: none;
+  }
+  .editors.max .panel {
+    flex: 1;
   }
   .panel {
     flex: none;
@@ -303,7 +385,14 @@
     align-items: center;
     padding-right: 0.5rem;
   }
+  /* the header shares its row with its action: it takes what is left, not all of it */
+  .section-row .section {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
   .section-row .icon {
+    flex: none;
     color: var(--wb-fg);
     width: 1.375rem;
     height: 1.375rem;

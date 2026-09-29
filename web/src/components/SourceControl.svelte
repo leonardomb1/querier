@@ -3,6 +3,7 @@
   import type { NotebookCtl } from "../lib/notebook.svelte";
   import Icon from "./Icon.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
+  import { menu as menuOf } from "../lib/can";
 
   // The Changes tab: branch and sync, a commit box, and what changed per cell.
   let { ctl, onsettings }: { ctl: NotebookCtl; onsettings: () => void } = $props();
@@ -14,6 +15,15 @@
   let newBranch = $state<string | null>(null);
 
   const LETTER = { modified: "M", added: "A", moved: "R", deleted: "D" } as const;
+  // each row's icon, by its file's extension, as the Explorer's
+  const ICON: Record<string, [string, string]> = {
+    sql: ["database", "var(--wb-lang-sql)"],
+    py: ["symbol-method", "var(--wb-lang-py)"],
+    md: ["markdown", "var(--wb-fg-muted)"],
+    svelte: ["file-code", "var(--wb-lang-svelte)"],
+    json: ["json", "var(--wb-fg-muted)"],
+  };
+  const iconOf = (file?: string) => ICON[file?.split(".").at(-1) ?? ""] ?? ["file", "var(--wb-fg-muted)"];
 
   /** A message from the changes, used when the box is left empty. */
   const suggestion = $derived.by(() => {
@@ -53,20 +63,21 @@
   const branchMenu = $derived<(MenuItem | "-")[]>([
     ...branches.map((b) => ({
       label: `${b.current ? "✓ " : ""}${b.name}`,
-      disabled: b.current,
+      disabled: b.current || !ctl.mayEdit,
       run: () => ctl.gitDo("Switching", () => api.git.switchBranch(ctl.name, b.name), { reload: true }),
     })),
-    "-",
-    { label: "New branch…", run: () => (newBranch = "") },
+    ...(ctl.mayEdit ? ["-" as const, { label: "New branch…", run: () => (newBranch = "") }] : []),
   ]);
 
-  const pullMenu = $derived<(MenuItem | "-")[]>([
-    { label: "Pull", run: () => ctl.gitDo("Pulling", () => api.git.pull(ctl.name), { reload: true }) },
-    { label: "Pull with rebase", run: () => ctl.gitDo("Pulling", () => api.git.pull(ctl.name, true), { reload: true }) },
-    { label: "Fetch", run: () => ctl.gitDo("Fetching", () => api.git.fetch(ctl.name)) },
-    "-",
-    { label: "Remote settings…", run: onsettings },
-  ]);
+  const pullMenu = $derived<(MenuItem | "-")[]>(
+    menuOf(
+      ctl.may("git.pull") && { label: "Pull", run: () => ctl.gitDo("Pulling", () => api.git.pull(ctl.name), { reload: true }) },
+      ctl.may("git.pull") && { label: "Pull with rebase", run: () => ctl.gitDo("Pulling", () => api.git.pull(ctl.name, true), { reload: true }) },
+      ctl.may("git.pull") && { label: "Fetch", run: () => ctl.gitDo("Fetching", () => api.git.fetch(ctl.name)) },
+      "-",
+      ctl.mayEdit && { label: "Remote settings…", run: onsettings },
+    ),
+  );
 
   async function createBranch(e: SubmitEvent) {
     e.preventDefault();
@@ -89,7 +100,7 @@
 {:else if !git.tracked}
   <div class="untracked">
     <p>This notebook isn't tracked with git.</p>
-    <button class="primary" onclick={() => (ctl.gitPrompt = true)}>Track with git…</button>
+    {#if ctl.mayEdit}<button class="primary" onclick={() => (ctl.gitPrompt = true)}>Track with git…</button>{/if}
   </div>
 {:else}
   <div class="branch-row">
@@ -102,11 +113,13 @@
     {#if git.remote}
       {#if git.behind}<span class="count" title="Commits on origin you don't have">↓{git.behind}</span>{/if}
       {#if git.ahead}<span class="count" title="Commits not yet on origin">↑{git.ahead}</span>{/if}
-      <button class="small" title="Push to origin" disabled={!!ctl.gitBusy} onclick={() => ctl.gitDo("Pushing", () => api.git.push(ctl.name))}>
-        Push
-      </button>
-      <Menu items={pullMenu} title="Pull and remote" />
-    {:else}
+      {#if ctl.may("git.push")}
+        <button class="small" title="Push to origin" disabled={!!ctl.gitBusy} onclick={() => ctl.gitDo("Pushing", () => api.git.push(ctl.name))}>
+          Push
+        </button>
+      {/if}
+      {#if pullMenu.length}<Menu items={pullMenu} title="Pull and remote" />{/if}
+    {:else if ctl.mayEdit}
       <button class="small" onclick={onsettings}>Add remote</button>
     {/if}
   </div>
@@ -119,6 +132,7 @@
     </form>
   {/if}
 
+  {#if ctl.mayEdit}
   <form class="commit" onsubmit={commit}>
     <textarea
       bind:value={message}
@@ -130,30 +144,39 @@
       {ctl.gitBusy ?? (count ? `Commit ${count === 1 ? "1 change" : `${count} changes`}` : "No changes")}
     </button>
   </form>
+  {/if}
 
   {#if count}
     <div class="section">
       <span>Changes</span>
-      <button class="link" onclick={() => discard()} title="Put every cell back as it was in the last commit">Discard all</button>
+      {#if ctl.mayEdit}<button class="link" onclick={() => discard()} title="Put every cell back as it was in the last commit">Discard all</button>{/if}
     </div>
     <ul>
       {#each git.cells as c (c.name)}
+        {@const [icon, color] = iconOf(c.file ?? c.was)}
         <li>
           <button class="entry" onclick={() => open(c.name, c.change)} disabled={c.change === "deleted"} title={c.was && c.file ? `${c.was} → ${c.file}` : (c.file ?? c.was)}>
+            <span class="ic" style:color={color}><Icon name={icon} size={14} /></span>
             <span class="cellname" class:gone={c.change === "deleted"}>{c.name}</span>
-            <span class="letter {c.change}">{LETTER[c.change]}</span>
+            {#if c.file ?? c.was}<span class="hint">{c.change === "moved" && c.was ? `${c.was} → ${c.file}` : (c.file ?? c.was)}</span>{/if}
           </button>
-          <button class="icon undo" title={c.change === "deleted" ? "Bring it back" : "Discard changes"} onclick={() => discard([c.name])}>
+          <button class="icon undo" title={c.change === "deleted" ? "Bring it back" : "Discard changes"} disabled={!ctl.mayEdit} onclick={() => discard([c.name])}>
             <Icon name="undo" size={13} />
           </button>
+          <span class="letter {c.change}" title={c.change}>{LETTER[c.change]}</span>
         </li>
       {/each}
       {#each git.files as f (f.path)}
+        {@const [icon, color] = iconOf(f.path)}
         <li>
-          <span class="entry file" title={f.path}>
-            <span class="cellname">{f.path}</span>
-            <span class="letter {f.change}">{LETTER[f.change]}</span>
+          <span class="entry" title={f.path}>
+            <span class="ic" style:color={color}><Icon name={icon} size={14} /></span>
+            <span class="cellname">{f.path.split("/").at(-1)}</span>
+            {#if f.path.includes("/")}<span class="hint">{f.path.slice(0, f.path.lastIndexOf("/"))}</span>{/if}
           </span>
+          <!-- no discard for files: the slot keeps the letters in one column -->
+          <span class="undo-slot"></span>
+          <span class="letter {f.change}" title={f.change}>{LETTER[f.change]}</span>
         </li>
       {/each}
     </ul>
@@ -292,17 +315,31 @@
     padding: 0 0.375rem;
     text-align: left;
     color: var(--ink-2);
-    font: 0.8125rem var(--mono);
+    font-size: 0.8125rem;
   }
   .entry:disabled {
     opacity: 1;
   }
-  .entry.file {
-    font-family: var(--sans);
-    font-size: 0.78rem;
+  .ic {
+    display: flex;
+    flex: none;
+  }
+  .hint {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .undo-slot {
+    flex: none;
+    width: 1.625rem;
   }
   .cellname {
-    flex: 1;
+    flex: none;
+    max-width: 70%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -311,7 +348,11 @@
     text-decoration: line-through;
     color: var(--muted);
   }
+  /* one column, right-aligned, whatever the row holds */
   .letter {
+    flex: none;
+    width: 1.25rem;
+    text-align: center;
     font: 600 0.7rem var(--mono);
   }
   .letter.modified {

@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { nbUrl } from "../../lib/api";
   import type { NotebookCtl } from "../../lib/notebook.svelte";
   import type { TemplateCtl } from "../../lib/template.svelte";
   import type { Workbench } from "../../lib/workbench.svelte";
   import Icon from "../Icon.svelte";
+  import Menu from "../Menu.svelte";
   import Outputs from "../Outputs.svelte";
 
   // The panel under the editors: Results (the output of the cell you are on) and
@@ -16,7 +18,7 @@
     return ctl.selected ?? null;
   });
   const run = $derived(cell ? ctl.conn.runs[cell] : undefined);
-  const exportUrl = $derived(cell ? `/api/notebooks/${encodeURIComponent(ctl.name)}/cells/${encodeURIComponent(cell)}/export` : "");
+  const exportUrl = $derived(cell ? `${nbUrl(ctl.name)}/cells/${encodeURIComponent(cell)}/export` : "");
 
   const templateProblem = $derived(tpl.built?.error ?? (tpl.frameError ? { message: tpl.frameError } : null));
   const problems = $derived(ctl.problems);
@@ -36,7 +38,7 @@
   const status = $derived(run?.state === "running" ? "running…" : run?.state === "queued" ? "queued" : run?.ms != null ? `${run.ms} ms` : "");
 </script>
 
-<section class="panel">
+<section class="panel" class:right={wb.panelPosition === "right"}>
   <div class="bar">
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected={wb.panelTab === "results"} class:on={wb.panelTab === "results"} onclick={() => ((wb.panelTab = "results"), wb.save())}>Results</button>
@@ -45,7 +47,19 @@
       </button>
     </div>
     {#if wb.panelTab === "results" && cell}<span class="context">{fileOf(cell)}{status ? ` · ${status}` : ""}</span>{/if}
-    <button class="icon close" title="Close the panel  (Ctrl+J)" aria-label="Close the panel" onclick={() => wb.togglePanel()}><Icon name="close" size={16} /></button>
+    <span class="acts">
+      <Menu
+        title="Views and more actions"
+        items={[
+          { label: "Panel Position: Bottom", hint: wb.panelPosition === "bottom" ? "✓" : "", run: () => wb.movePanel("bottom") },
+          { label: "Panel Position: Right", hint: wb.panelPosition === "right" ? "✓" : "", run: () => wb.movePanel("right") },
+        ]}
+      />
+      <button class="icon" title={wb.panelMax ? "Restore Panel Size" : "Maximize Panel Size"} aria-label={wb.panelMax ? "Restore the panel's size" : "Maximize the panel"} onclick={() => wb.toggleMaxPanel()}>
+        <Icon name={wb.panelMax ? (wb.panelPosition === "right" ? "chevron-right" : "chevron-down") : wb.panelPosition === "right" ? "chevron-left" : "chevron-up"} size={16} />
+      </button>
+      <button class="icon" title="Close the panel  (Ctrl+J)" aria-label="Close the panel" onclick={() => wb.togglePanel()}><Icon name="close" size={16} /></button>
+    </span>
   </div>
 
   <div class="body">
@@ -94,6 +108,22 @@
     background: var(--wb-side);
     border-top: 1px solid var(--wb-border);
     font-size: 0.8125rem;
+  }
+  .panel.right {
+    border-top: 0;
+    border-left: 1px solid var(--wb-border);
+  }
+  .acts {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    margin-left: auto;
+  }
+  .acts :global(button.icon) {
+    width: 1.625rem;
+    height: 1.625rem;
+    color: var(--wb-fg);
+    border-radius: 5px;
   }
   .bar {
     display: flex;
@@ -151,10 +181,6 @@
     font-size: 0.75rem;
     color: var(--wb-fg-muted);
     font-family: var(--mono);
-  }
-  .close {
-    margin-left: auto;
-    color: var(--wb-fg);
   }
   .body {
     flex: 1;

@@ -1,6 +1,4 @@
 import { expect, test } from "bun:test";
-import { CompletionContext } from "@codemirror/autocomplete";
-import { EditorState } from "@codemirror/state";
 import { templateCompletion, templateHover, type TemplateData } from "../web/src/lib/templatecomplete";
 
 const data: TemplateData = {
@@ -11,12 +9,16 @@ const data: TemplateData = {
   params: [{ name: "focus", type: "STRING", value: "West" }],
 };
 const complete = templateCompletion(() => data);
+test("snippets become VS Code's: $1, ${2:name}", async () => {
+  const { vsSnippet } = await import("../web/src/lib/editor");
+  expect(vsSnippet('Value cell="${}" column="${col}" />')).toBe('Value cell="$1" column="${2:col}" />');
+});
 /** What is offered where `|` is. */
 function at(text: string) {
   const pos = text.indexOf("|");
   const doc = text.replace("|", "");
-  const r = complete(new CompletionContext(EditorState.create({ doc }), pos, true));
-  return r ? r.options.map((o) => o.label) : null;
+  const r = complete(doc, pos);
+  return r ? r.items.map((o) => o.label) : null;
 }
 
 test("cells, their view, their columns", () => {
@@ -44,6 +46,12 @@ test("in a hook's tag: its name, attributes, and their values", () => {
 
 test("Svelte blocks, runes in the script, hooks in the import", () => {
   expect(at("{#|")).toContain("#each");
+  expect(at("{#|")).toEqual(expect.arrayContaining(["#snippet", "@render", "#await", "#key", "@attach"]));
+  // the closer of the innermost open block, and its branches
+  expect(at("{#each xs as x}{#if x}{|")).toEqual(expect.arrayContaining(["/if", ":else", ":else if"]));
+  expect(at("{#each xs as x}{#if x}{/if}{|")).toContain("/each");
+  expect(at("{#each xs as x}{#if x}{/if}{|")).not.toContain("/if");
+  expect(at("<p>{$|}</p>")).toContain("$state");
   expect(at("<script>let x = $|</script>")).toContain("$derived");
   expect(at("<p>$|</p>")).toBeNull();
   expect(at('<script>import { Va| } from "querier";</script>')).toContain("Value");

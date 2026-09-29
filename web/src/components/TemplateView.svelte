@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { nbUrl } from "../lib/api";
   import type { NotebookCtl } from "../lib/notebook.svelte";
   import { isDark } from "../lib/vegatheme";
   import { zoom } from "../lib/zoom.svelte";
@@ -9,13 +10,14 @@
   // What the template may know arrives as messages (web/src/template/runtime.svelte.ts):
   // the cells it names, the PARAM values, the theme. The one thing it can ask back
   // is to set a PARAM.
-  let { ctl, version, cells, onerror }: { ctl: NotebookCtl; version: string; cells: string[]; onerror?: (message: string) => void } = $props();
+  // `token`: the frame sends no cookie, so its script is fetched with a signed token
+  let { ctl, version, token, cells, onerror }: { ctl: NotebookCtl; version: string; token: string; cells: string[]; onerror?: (message: string) => void } = $props();
 
   let frame = $state<HTMLIFrameElement>();
   let ready = $state(false);
   let height = $state(160);
 
-  const src = $derived(`${location.origin}/api/notebooks/${encodeURIComponent(ctl.name)}/template.js?v=${version}`);
+  const src = $derived(`${location.origin}${nbUrl(ctl.name)}/template.js?v=${version}&t=${encodeURIComponent(token)}${ctl.reportMode ? "&published=1" : ""}`);
   // a new bundle, a new document
   const srcdoc = $derived(
     `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">` +

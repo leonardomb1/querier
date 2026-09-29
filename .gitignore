@@ -6,3 +6,5 @@ web/dist/
 .cache/
 # your notebooks: data, and each may be its own git repository
 notebooks/
+# the sysadmin, and any other secrets of your deployment (see .env.example)
+.env

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { cubicOut } from "svelte/easing";
+  import { fade, scale, slide } from "svelte/transition";
   import type { Output } from "../lib/conn.svelte";
   import { arrowTable } from "../lib/format";
   import { parseSearch, type Term } from "../lib/search";
@@ -23,7 +25,7 @@
     exporting = format;
     exportError = "";
     try {
-      const r = await fetch(`${exportUrl}?format=${format}`);
+      const r = await fetch(`${exportUrl}${exportUrl.includes("?") ? "&" : "?"}format=${format}`);
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? r.statusText);
       const url = URL.createObjectURL(await r.blob());
       const a = Object.assign(document.createElement("a"), { href: url, download: `${out.name}.${format}` });
@@ -69,6 +71,33 @@
     }, 300);
   });
   const shown = $derived(full?.table ?? table);
+
+  // -- the search box, as VS Code's find widget: it slides open from its icon,
+  // counts what it finds, and says how it read the query; its syntax is a click away
+  let help = $state(false);
+  let input = $state<HTMLInputElement>();
+  function open() {
+    searching = true;
+    requestAnimationFrame(() => input?.focus());
+  }
+  function close() {
+    query = "";
+    searching = false;
+    help = false;
+  }
+  const OPS: Record<string, string> = { has: "contains", "=": "=", "!=": "≠", ">": ">", ">=": "≥", "<": "<", "<=": "≤" };
+  /** each term as it was understood: which column, which comparison */
+  const readAs = $derived(terms.map((t) => `${t.not ? "not " : ""}${t.col ?? "any column"} ${OPS[t.op]} ${t.value}`));
+  const count = $derived(query ? (full ? full.rows : asking ? null : matches) : null);
+  const EXAMPLES: [string, string][] = [
+    ["000600", "any column contains it"],
+    ["customer:000600", "that column contains it"],
+    ["state=BA", "equals (state!=BA: doesn't)"],
+    ["total>1000", "compares: > >= < <="],
+    ["day>=2025-01-31", "dates compare too"],
+    ["-transfer", "leaves those rows out"],
+    ['"two words"', "a phrase"],
+  ];
 </script>
 
 <div class="result">
@@ -82,8 +111,8 @@
         <span class="muted">· <b class="found">{fmt.format(full.rows)}</b> match{full.rows === 1 ? "" : "es"} in all {fmt.format(full.of)} rows{full.truncated ? `, first ${fmt.format(full.table.numRows)} here` : ""}</span>
       {:else if query && asking}
         <span class="muted">· searching all {fmt.format(out.rows)} rows…</span>
-      {:else if query}
-        <span class="muted">· {fmt.format(matches)} match{matches === 1 ? "" : "es"}{out.truncated ? ` in the first ${fmt.format(table.numRows)}` : ""}</span>
+      {:else if query && out.truncated}
+        <span class="muted">· in the first {fmt.format(table.numRows)}</span>
       {/if}
       {#if fullError}<span class="warn" title={fullError}>· {fullError}</span>{/if}
       {#if exporting}<span class="muted">· writing {exporting === "csv" ? "CSV" : "Parquet"}…</span>{/if}
@@ -91,22 +120,46 @@
     </span>
     <span class="tools">
       {#if searching || query}
-        <!-- svelte-ignore a11y_autofocus -->
-        <span class="search-box">
+        <div class="find" transition:slide={{ axis: "x", duration: 160, easing: cubicOut }}>
+          <span class="find-ic"><Icon name="search" size={14} /></span>
           <input
-            class="search"
-            placeholder="Search · col:text · col>10 · -text"
-            title={"Search the rows:\n  000600           any column contains it\n  customer:000600  that column contains it\n  state=BA         equals (!= doesn't)\n  total>1000       compares (>, >=, <, <=; dates as 2025-01-31)\n  -transfer        leaves those out\n  \"two words\"      a phrase\nTerms combine with AND."}
+            bind:this={input}
+            placeholder="Search rows"
+            aria-label="Search the rows"
             bind:value={query}
-            autofocus
             spellcheck="false"
-            onkeydown={(e) => e.key === "Escape" && ((query = ""), (searching = false))}
-            onblur={() => !query && (searching = false)}
+            autocomplete="off"
+            onkeydown={(e) => e.key === "Escape" && (e.stopPropagation(), close())}
+            onblur={(e) => !query && !(e.relatedTarget as HTMLElement | null)?.closest(".find") && close()}
           />
-          {#if query}<button class="icon clear" aria-label="Clear the search" onclick={() => ((query = ""), (searching = false))}><Icon name="x" size={12} /></button>{/if}
-        </span>
+          {#if query}
+            <span class="count" class:none={count === 0} transition:fade={{ duration: 100 }}>
+              {count == null ? "…" : count === 0 ? "No results" : `${fmt.format(count)} ${count === 1 ? "row" : "rows"}`}
+            </span>
+          {/if}
+          <button class="icon" class:on={help} title="Search syntax" aria-label="Search syntax" aria-expanded={help} onclick={() => ((help = !help), input?.focus())}>
+            <Icon name="question" size={14} />
+          </button>
+          <button class="icon" title="Close  (Escape)" aria-label="Close the search" onclick={close}><Icon name="close" size={14} /></button>
+          {#if help || (query && readAs.some((r) => !r.startsWith("any column contains")))}
+            <div class="find-pop" transition:scale={{ start: 0.97, duration: 120, easing: cubicOut, opacity: 0 }}>
+              {#if query && readAs.length}
+                <p class="read">Read as <span>{#each readAs as r, i}{#if i}<em>and</em>{/if}<code>{r}</code>{/each}</span></p>
+              {/if}
+              {#if help}
+                <dl>
+                  {#each EXAMPLES as [ex, what] (ex)}
+                    <dt><button onclick={() => ((query = ex), input?.focus())}>{ex}</button></dt>
+                    <dd>{what}</dd>
+                  {/each}
+                </dl>
+                <p class="note">Terms combine with AND. Click an example to try it.</p>
+              {/if}
+            </div>
+          {/if}
+        </div>
       {:else}
-        <button class="icon" title="search rows" onclick={() => (searching = true)}><Icon name="search" size={14} /></button>
+        <button class="icon" title="Search rows" aria-label="Search rows" onclick={open}><Icon name="search" size={14} /></button>
       {/if}
       {#if exportUrl && out.name}
         <Menu
@@ -153,22 +206,125 @@
     align-items: center;
     gap: 0.375rem;
   }
-  .search-box {
+  /* the search box: VS Code's find widget */
+  .find {
     position: relative;
-    display: inline-flex;
+    display: flex;
     align-items: center;
+    gap: 1px;
+    width: 20rem;
+    height: 1.625rem;
+    padding: 0 0.125rem 0 0.4375rem;
+    background: var(--wb-input, var(--surface));
+    border: 1px solid var(--wb-input-border, var(--hair));
+    border-radius: 4px;
+    overflow: visible;
   }
-  .search {
-    font: 0.75rem var(--mono);
-    width: 17rem;
-    padding: 2px 1.5rem 2px 0.5rem;
-    border-radius: 6px;
+  .find:focus-within {
+    border-color: var(--wb-accent, var(--accent));
+    box-shadow: 0 0 0 1px var(--wb-accent, var(--accent));
   }
-  .search-box .clear {
+  .find-ic {
+    display: flex;
+    color: var(--muted);
+    margin-right: 0.25rem;
+  }
+  .find input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: 0.8125rem var(--sans);
+    color: var(--ink);
+    outline: none;
+  }
+  .find input::placeholder {
+    color: var(--muted);
+  }
+  .count {
+    padding: 0 0.375rem;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .count.none {
+    color: var(--warning);
+  }
+  .find .icon {
+    width: 1.375rem;
+    height: 1.375rem;
+    border-radius: 3px;
+  }
+  .find .icon.on {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--wb-accent, var(--accent)) 25%, transparent);
+  }
+  .find-pop {
     position: absolute;
-    right: 0.125rem;
-    width: 1.25rem;
-    height: 1.25rem;
+    top: calc(100% + 0.375rem);
+    right: 0;
+    z-index: 5;
+    width: 22rem;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.75rem;
+    color: var(--ink-2);
+    background: var(--wb-editor, var(--surface));
+    border: 1px solid var(--wb-input-border, var(--hair));
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+    transform-origin: top right;
+  }
+  .read {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    align-items: baseline;
+    margin: 0;
+    color: var(--muted);
+  }
+  .read span {
+    display: contents;
+  }
+  .read code {
+    padding: 0 0.3rem;
+    font-size: 0.7rem;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--ink) 8%, transparent);
+    border-radius: 3px;
+  }
+  .read em {
+    font-style: normal;
+    font-size: 0.7rem;
+  }
+  .read + dl {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--hair);
+  }
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.125rem 0.75rem;
+    margin: 0;
+  }
+  dt button {
+    padding: 0 0.25rem;
+    font: 0.72rem var(--mono);
+    color: var(--wb-accent, var(--accent));
+    border-radius: 3px;
+  }
+  dd {
+    margin: 0;
+    align-self: center;
+    color: var(--muted);
+  }
+  .note {
+    margin: 0.5rem 0 0;
+    font-size: 0.7rem;
+    color: var(--muted);
   }
   .found {
     color: var(--ink);

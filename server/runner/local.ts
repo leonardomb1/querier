@@ -35,7 +35,7 @@ export class LocalRunner implements Runner {
     this.copy = !!o.copy;
   }
 
-  async open({ notebookDir, env }: OpenOptions): Promise<Session> {
+  async open({ notebookDir, env, packages }: OpenOptions): Promise<Session> {
     await Bun.$`mkdir -p ${this.workRoot}`.quiet();
     const work = await mkdtemp(join(this.workRoot, "s-"));
     let cwd = resolve(notebookDir);
@@ -49,7 +49,14 @@ export class LocalRunner implements Runner {
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, ...env },
+        env: {
+          ...process.env,
+          ...env,
+          // the environment's packages first: the notebook's, then the workspace's, then the interpreter's own
+          ...(packages?.notebook || packages?.workspace
+            ? { PYTHONPATH: [packages.notebook?.dir, packages.workspace?.dir, process.env.PYTHONPATH].filter(Boolean).join(":") }
+            : {}),
+        },
       },
     );
     // Anything the kernel writes outside a cell (warnings, crashes) lands here.
