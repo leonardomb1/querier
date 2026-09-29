@@ -1,0 +1,23 @@
+# Querier with each notebook session in a Firecracker microVM.
+#   docker compose up --build        → http://localhost:3000
+services:
+  querier:
+    build: .
+    image: querier
+    ports: ["3000:3000"]
+    volumes:
+      - querier-data:/data   # notebooks, and secrets (config/secrets.json, mode 600)
+    devices:
+      - /dev/kvm             # microVMs need KVM
+      - /dev/net/tun         # and a tap each, for the ones allowed a network
+    # nothing but what the sandboxes need: taps and nftables for their network (in
+    # this container's namespace, never the host's), dropping Firecracker to its own
+    # user, chown of each VM's files, and stopping VMs
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETUID, SETGID, CHOWN, KILL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    restart: unless-stopped
+volumes:
+  querier-data:

@@ -1,0 +1,257 @@
+// The live side of a notebook: one WebSocket to the server's Host, holding
+// each cell's run state and outputs. Frames match server/runner/protocol.ts.
+
+import type { Deps, Ran } from "../../../shared/graph";
+
+export type CellState = "idle" | "queued" | "running" | "ok" | "error";
+
+export type Output =
+  | { type: "stream"; stream: "stdout" | "stderr"; text: string }
+  | {
+      type: "table";
+      name: string | null;
+      rows: number;
+      truncated: boolean;
+      capped: boolean;
+      columns: { name: string; type: string }[];
+      arrow: Uint8Array;
+    }
+  | { type: "display"; mime: string; data: Uint8Array }
+  | { type: "error"; message: string; line?: number; col?: number; end_col?: number; traceback?: string; shown?: boolean }
+  // one per LOAD as it finishes (inside a FOR EACH, one per row), then the run's totals
+  | {
+      type: "load";
+      load: number;
+      target: string;
+      rows_read: number;
+      rows_written: number;
+      elapsed_ms: number;
+      lanes: number;
+      ok: boolean;
+      reason?: string;
+      transient?: boolean;
+      line?: number;
+      col?: number;
+      loop_row?: number;
+      loop_rows?: number;
+    }
+  | { type: "loads"; loads_ok: number; loads_failed: number; rows_read: number; rows_loaded: number; lanes: number; elapsed_ms: number };
+
+export interface Progress {
+  target: string;
+  rows: number;
+  rows_per_sec: number;
+  elapsed_ms: number;
+  loop_done?: number;
+  loop_total?: number;
+  /** When it arrived (ms), so the clock can keep running between frames. */
+  at: number;
+}
+
+export interface CellRun {
+  state: CellState;
+  ms?: number;
+  ran?: Ran;
+  outputs: Output[];
+  progress?: Progress;
+}
+
+export interface TableInfo {
+  name: string;
+  rows: number;
+  columns: { name: string; type: string }[];
+}
+
+export interface Inspection {
+  columns: string[];
+  rows: unknown[][];
+  error?: string;
+}
+
+/** A problem basalt's check found, 1-based in the cell's source. */
+export interface Diagnostic {
+  level: "error" | "warning";
+  msg: string;
+  line: number;
+  col: number;
+  end_line?: number;
+  end_col?: number;
+}
+
+export interface Completion {
+  start: number;
+  end: number;
+  items: { text: string; kind: string; detail?: string }[];
+}
+
+function decode(buf: ArrayBuffer): { meta: any; data: Uint8Array } {
+  const view = new DataView(buf);
+  const n = view.getUint32(0);
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const m = view.getUint32(4 + n);
+  return { meta, data: new Uint8Array(buf, 8 + n, m) };
+}
+
+export class NotebookConn {
+  runs = $state<Record<string, CellRun>>({});
+  session = $state<"none" | "starting" | "ready" | "dead" | "offline">("offline");
+  info = $state<Record<string, string>>({});
+  /** Secrets changed after the kernel started; it has the old ones until a restart. */
+  secretsStale = $state(false);
+  tables = $state<TableInfo[]>([]);
+  declared = $state<{ kind: string; name: string }[]>([]);
+  deps = $state<Record<string, Deps>>({});
+  /** The server has replayed this notebook's state: runs, stamps, deps. */
+  synced = $state(false);
+  /** Sent before the socket opened; delivered when it does. */
+  private outbox: string[] = [];
+
+  private ws?: WebSocket;
+  private closed = false;
+  private retry = 0;
+  private nextId = 1;
+  private waiting = new Map<number, (reply: any) => void>();
+
+  constructor(
+    private nb: string,
+    private onNotebookChanged: () => void,
+  ) {
+    this.connect();
+  }
+
+  private connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.nb)}`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      this.retry = 0;
+      this.runs = {};
+      for (const m of this.outbox.splice(0)) ws.send(m);
+    };
+    ws.onmessage = (e) => this.handle(decode(e.data));
+    ws.onclose = () => {
+      this.session = "offline";
+      this.synced = false;
+      if (!this.closed) setTimeout(() => this.connect(), Math.min(5000, 250 * 2 ** this.retry++));
+    };
+    this.ws = ws;
+  }
+
+  private run(cell: string): CellRun {
+    return (this.runs[cell] ??= { state: "idle", outputs: [] });
+  }
+
+  private handle({ meta, data }: { meta: any; data: Uint8Array }) {
+    switch (meta.type) {
+      case "session":
+        this.session = meta.state;
+        this.info = meta.info ?? {};
+        this.secretsStale = !!meta.secretsStale;
+        break;
+      case "state": {
+        const r = this.run(meta.cell);
+        r.state = meta.state;
+        r.ms = meta.ms;
+        r.ran = meta.ran;
+        if (meta.state !== "running") r.progress = undefined;
+        break;
+      }
+      case "forget":
+        delete this.runs[meta.cell];
+        break;
+      case "clear":
+        this.runs[meta.cell] = { state: "running", outputs: [], ran: this.runs[meta.cell]?.ran };
+        break;
+      case "event": {
+        const ev = meta.event;
+        const r = this.run(meta.cell);
+        if (ev.type === "progress") r.progress = { ...ev, at: Date.now() };
+        else if (ev.type === "table") r.outputs.push({ ...ev, arrow: data });
+        else if (ev.type === "display") r.outputs.push({ ...ev, data });
+        else if (ev.type === "stream") {
+          const last = r.outputs.at(-1);
+          if (last?.type === "stream" && last.stream === ev.stream) last.text += ev.text;
+          else r.outputs.push(ev);
+        } else r.outputs.push(ev);
+        break;
+      }
+      case "tables":
+        this.tables = meta.tables;
+        this.declared = meta.declared ?? [];
+        break;
+      case "deps":
+        this.deps = meta.deps;
+        break;
+      case "replayed":
+        this.synced = true;
+        break;
+      case "filtered":
+        this.waiting.get(meta.id)?.({ ...meta, arrow: data });
+        this.waiting.delete(meta.id);
+        break;
+      case "complete":
+      case "inspect":
+      case "check":
+        this.waiting.get(meta.id)?.(meta);
+        this.waiting.delete(meta.id);
+        break;
+      case "notebook":
+        this.onNotebookChanged();
+        break;
+    }
+  }
+
+
+  private send(msg: object) {
+    const text = JSON.stringify(msg);
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(text);
+    else if (!this.closed) this.outbox.push(text);
+  }
+
+  runCells(cells: string[], params: Record<string, string>) {
+    this.send({ op: "run", cells, params });
+  }
+
+  interrupt() {
+    this.send({ op: "interrupt" });
+  }
+
+  restart() {
+    this.send({ op: "restart" });
+  }
+
+  private ask<T>(msg: object, timeoutMs: number, fallback: T): Promise<T> {
+    const id = this.nextId++;
+    return new Promise((resolve) => {
+      this.waiting.set(id, resolve);
+      this.send({ ...msg, id });
+      setTimeout(() => {
+        if (this.waiting.delete(id)) resolve(fallback);
+      }, timeoutMs);
+    });
+  }
+
+  complete(lang: string, source: string, pos: number): Promise<Completion> {
+    return this.ask({ op: "complete", lang, source, pos }, 3000, { start: pos, end: pos, items: [] });
+  }
+
+  /** A search over a cell's whole result in the kernel: the first matching rows, and how many. */
+  filter(cell: string, terms: unknown[]): Promise<{ rows: number; of: number; truncated: boolean; arrow?: Uint8Array; error?: string }> {
+    return this.ask({ op: "filter", cell, terms }, 60_000, { rows: 0, of: 0, truncated: false, error: "the search timed out" });
+  }
+
+  /** Every problem basalt's check finds in a SQL cell, without running it. */
+  check(source: string, cell: string): Promise<Diagnostic[]> {
+    return this.ask({ op: "check", source, cell }, 10_000, { diagnostics: [] }).then((r: any) => r.diagnostics ?? []);
+  }
+
+  /** SHOW TABLES / DESCRIBE for the sidebar; waits behind a running cell. */
+  inspect(script: string): Promise<Inspection> {
+    return this.ask({ op: "inspect", script }, 60_000, { columns: [], rows: [], error: "timed out" });
+  }
+
+  close() {
+    this.closed = true;
+    this.ws?.close();
+  }
+}

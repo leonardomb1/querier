@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+__pycache__/
+web/dist/
+# built report templates (server/template.ts)
+.cache/
+# your notebooks: data, and each may be its own git repository
+notebooks/

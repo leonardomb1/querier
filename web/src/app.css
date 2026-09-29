@@ -1,0 +1,511 @@
+:root {
+  color-scheme: light;
+  --page: #f3f2ee;
+  --surface: #fcfcfb;
+  --surface-2: #f7f6f3;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --hair: rgba(11, 11, 11, 0.1);
+  --accent: #2a78d6;
+  --good: #006300;
+  --critical: #d03b3b;
+  --warning: #9a6700;
+  --sel: rgba(42, 120, 214, 0.18);
+  --stale: #b87400;
+  --select-band: rgba(11, 11, 11, 0.035);
+  --hover: rgba(11, 11, 11, 0.06);
+  --pressed: rgba(11, 11, 11, 0.1);
+  --run: #1a8a3a;
+  /* git, after VS Code's gutter and diff colors */
+  --git-added: #2ea043;
+  --git-modified: #0969da;
+  --git-deleted: #cf222e;
+  --git-added-bg: rgba(46, 160, 67, 0.12);
+  --git-added-text: rgba(46, 160, 67, 0.28);
+  --git-deleted-bg: rgba(207, 34, 46, 0.1);
+  --git-deleted-text: rgba(207, 34, 46, 0.25);
+  --git-letter-added: #1a7f37;
+  --git-letter-modified: #9a6700;
+  --git-letter-deleted: #cf222e;
+  --scroll-thumb: rgba(100, 100, 100, 0.3);
+  --scroll-thumb-hover: rgba(100, 100, 100, 0.45);
+  --scroll-thumb-active: rgba(100, 100, 100, 0.65);
+  --scrim: rgba(20, 20, 18, 0.32);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ring: rgba(42, 120, 214, 0.55);
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 1px rgba(11, 11, 11, 0.03);
+  --shadow-lg: 0 10px 30px rgba(11, 11, 11, 0.12), 0 2px 6px rgba(11, 11, 11, 0.06);
+  --tint-sql: rgba(42, 120, 214, 0.1);
+  --tint-py: rgba(27, 175, 122, 0.12);
+  --tint-md: rgba(137, 135, 129, 0.14);
+
+  /* code: after VS Code Light Modern */
+  --code-bg: #ffffff;
+  --code-ink: #3b3b3b;
+  --code-cursor: #000000;
+  --code-selection: #add6ff;
+  --code-line: rgba(0, 0, 0, 0.04);
+  --code-selection-blur: #e5ebf1;
+  --suggest-bg: #f8f8f8;
+  --suggest-border: #c8c8c8;
+  --suggest-ink: #3b3b3b;
+  --suggest-hover: #f0f0f0;
+  --suggest-sel: #e8e8e8;
+  --suggest-sel-ink: #000000;
+  --suggest-focus: #005fb8;
+  --suggest-match: #0066bf;
+  --suggest-detail: #767676;
+  --icon-plain: #616161;
+  --code-gutter: #6e7681;
+  --code-gutter-active: #171184;
+  --code-bracket: #b9b9b9;
+  --code-match: rgba(173, 214, 255, 0.5);
+  --code-find: rgba(234, 92, 0, 0.25);
+  --code-find-edge: rgba(234, 92, 0, 0.5);
+  --code-find-current: #a8ac94;
+  --icon-fn: #652d90;
+  --icon-var: #007acc;
+  --icon-class: #d67e00;
+  --c-keyword: #0000ff;
+  --c-control: #af00db;
+  --c-string: #a31515;
+  --c-number: #098658;
+  --c-comment: #008000;
+  --c-function: #795e26;
+  --c-type: #267f99;
+  --c-variable: #001080;
+
+  /* set by lib/fonts.svelte.ts; these are the defaults */
+  /* the workbench's surfaces, after VS Code's Light Modern */
+  --wb-bar: #f8f8f8;
+  --wb-side: #f8f8f8;
+  --wb-editor: #ffffff;
+  --wb-tab: #f8f8f8;
+  --wb-tab-active: #ffffff;
+  --wb-border: #e5e5e5;
+  --wb-fg: #3b3b3b;
+  --wb-fg-muted: #616161;
+  --wb-fg-dim: #868686;
+  --wb-accent: #005fb8;
+  --wb-list-hover: #f2f2f2;
+  --wb-list-active: #e4e6f1;
+  --wb-badge: #005fb8;
+  --wb-input: #ffffff;
+  --wb-input-border: #cecece;
+  --wb-lang-sql: #0078d4;
+  --wb-lang-py: #b8860b;
+  --wb-lang-svelte: #d6541f;
+  --sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #151514;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --hair: rgba(255, 255, 255, 0.1);
+    --accent: #3987e5;
+    --good: #0ca30c;
+    --critical: #e66767;
+    --warning: #fab219;
+    --sel: rgba(57, 135, 229, 0.3);
+    --stale: #fab219;
+    --select-band: rgba(255, 255, 255, 0.035);
+    --hover: rgba(255, 255, 255, 0.08);
+    --pressed: rgba(255, 255, 255, 0.13);
+    --run: #3fb950;
+    --git-added: #2ea043;
+    --git-modified: #1b81a8;
+    --git-deleted: #f85149;
+    --git-added-bg: rgba(46, 160, 67, 0.15);
+    --git-added-text: rgba(46, 160, 67, 0.35);
+    --git-deleted-bg: rgba(248, 81, 73, 0.12);
+    --git-deleted-text: rgba(248, 81, 73, 0.3);
+    --git-letter-added: #73c991;
+    --git-letter-modified: #e2c08d;
+    --git-letter-deleted: #c74e39;
+    --scroll-thumb: rgba(121, 121, 121, 0.4);
+    --scroll-thumb-hover: rgba(140, 140, 140, 0.55);
+    --scroll-thumb-active: rgba(170, 170, 170, 0.7);
+    --scrim: rgba(0, 0, 0, 0.6);
+    --ring: rgba(57, 135, 229, 0.7);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+    --tint-sql: rgba(57, 135, 229, 0.16);
+    --tint-py: rgba(25, 158, 112, 0.18);
+    --tint-md: rgba(137, 135, 129, 0.18);
+    /* the workbench's surfaces, after VS Code's Dark Modern */
+  --wb-bar: #181818;
+  --wb-side: #181818;
+  --wb-editor: #1f1f1f;
+  --wb-tab: #181818;
+  --wb-tab-active: #1f1f1f;
+  --wb-border: #2b2b2b;
+  --wb-fg: #cccccc;
+  --wb-fg-muted: #9d9d9d;
+  --wb-fg-dim: #868686;
+  --wb-accent: #0078d4;
+  --wb-list-hover: #2a2d2e;
+  --wb-list-active: #37373d;
+  --wb-badge: #0078d4;
+  --wb-input: #313131;
+  --wb-input-border: #3c3c3c;
+  --wb-lang-sql: #4da6ff;
+  --wb-lang-py: #e2c08d;
+  --wb-lang-svelte: #ff7043;
+  /* code: after VS Code Dark Modern */
+    --code-bg: #1f1f1f;
+    --code-ink: #cccccc;
+    --code-cursor: #aeafad;
+    --code-selection: #264f78;
+    --code-line: rgba(255, 255, 255, 0.045);
+    --code-selection-blur: #3a3d41;
+    --suggest-bg: #202020;
+    --suggest-border: #454545;
+    --suggest-ink: #cccccc;
+    --suggest-hover: #2a2d2e;
+    --suggest-sel: #04395e;
+    --suggest-sel-ink: #ffffff;
+    --suggest-focus: #0078d4;
+    --suggest-match: #2aaaff;
+    --suggest-detail: #9d9d9d;
+    --icon-plain: #cccccc;
+    --code-gutter: #6e7681;
+    --code-gutter-active: #cccccc;
+    --code-bracket: #888888;
+    --code-match: rgba(173, 214, 255, 0.15);
+    --code-find: rgba(234, 92, 0, 0.33);
+    --code-find-edge: rgba(234, 92, 0, 0.6);
+    --code-find-current: #515c6a;
+    --icon-fn: #b180d7;
+    --icon-var: #75beff;
+    --icon-class: #ee9d28;
+    --c-keyword: #569cd6;
+    --c-control: #c586c0;
+    --c-string: #ce9178;
+    --c-number: #b5cea8;
+    --c-comment: #6a9955;
+    --c-function: #dcdcaa;
+    --c-type: #4ec9b0;
+    --c-variable: #9cdcfe;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #151514;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --hair: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+  --good: #0ca30c;
+  --critical: #e66767;
+  --warning: #fab219;
+  --sel: rgba(57, 135, 229, 0.3);
+  --stale: #fab219;
+  --select-band: rgba(255, 255, 255, 0.035);
+  --hover: rgba(255, 255, 255, 0.08);
+  --pressed: rgba(255, 255, 255, 0.13);
+  --run: #3fb950;
+  --git-added: #2ea043;
+  --git-modified: #1b81a8;
+  --git-deleted: #f85149;
+  --git-added-bg: rgba(46, 160, 67, 0.15);
+  --git-added-text: rgba(46, 160, 67, 0.35);
+  --git-deleted-bg: rgba(248, 81, 73, 0.12);
+  --git-deleted-text: rgba(248, 81, 73, 0.3);
+  --git-letter-added: #73c991;
+  --git-letter-modified: #e2c08d;
+  --git-letter-deleted: #c74e39;
+  --scroll-thumb: rgba(121, 121, 121, 0.4);
+  --scroll-thumb-hover: rgba(140, 140, 140, 0.55);
+  --scroll-thumb-active: rgba(170, 170, 170, 0.7);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --ring: rgba(57, 135, 229, 0.7);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --tint-sql: rgba(57, 135, 229, 0.16);
+  --tint-py: rgba(25, 158, 112, 0.18);
+  --tint-md: rgba(137, 135, 129, 0.18);
+  /* code: after VS Code Dark Modern */
+  --code-bg: #1f1f1f;
+  --code-ink: #cccccc;
+  --code-cursor: #aeafad;
+  --code-selection: #264f78;
+  --code-line: rgba(255, 255, 255, 0.045);
+  --code-selection-blur: #3a3d41;
+  --suggest-bg: #202020;
+  --suggest-border: #454545;
+  --suggest-ink: #cccccc;
+  --suggest-hover: #2a2d2e;
+  --suggest-sel: #04395e;
+  --suggest-sel-ink: #ffffff;
+  --suggest-focus: #0078d4;
+  --suggest-match: #2aaaff;
+  --suggest-detail: #9d9d9d;
+  --icon-plain: #cccccc;
+  --code-gutter: #6e7681;
+  --code-gutter-active: #cccccc;
+  --code-bracket: #888888;
+  --code-match: rgba(173, 214, 255, 0.15);
+  --code-find: rgba(234, 92, 0, 0.33);
+  --code-find-edge: rgba(234, 92, 0, 0.6);
+  --code-find-current: #515c6a;
+  --icon-fn: #b180d7;
+  --icon-var: #75beff;
+  --icon-class: #ee9d28;
+  --c-keyword: #569cd6;
+  --c-control: #c586c0;
+  --c-string: #ce9178;
+  --c-number: #b5cea8;
+  --c-comment: #6a9955;
+  --c-function: #dcdcaa;
+  --c-type: #4ec9b0;
+  --c-variable: #9cdcfe;
+  --wb-bar: #181818;
+  --wb-side: #181818;
+  --wb-editor: #1f1f1f;
+  --wb-tab: #181818;
+  --wb-tab-active: #1f1f1f;
+  --wb-border: #2b2b2b;
+  --wb-fg: #cccccc;
+  --wb-fg-muted: #9d9d9d;
+  --wb-fg-dim: #868686;
+  --wb-accent: #0078d4;
+  --wb-list-hover: #2a2d2e;
+  --wb-list-active: #37373d;
+  --wb-badge: #0078d4;
+  --wb-input: #313131;
+  --wb-input-border: #3c3c3c;
+  --wb-lang-sql: #4da6ff;
+  --wb-lang-py: #e2c08d;
+  --wb-lang-svelte: #ff7043;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 0.875rem/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--sel);
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font: inherit;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+  padding: 2px 0.375rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button {
+  transition:
+    background-color 0.12s var(--ease),
+    color 0.12s var(--ease),
+    transform 0.1s var(--ease);
+}
+button:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+/* a press gives way a little, so a click is felt */
+button:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.04s;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button:disabled:hover {
+  background: none;
+}
+button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+button.icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  padding: 0;
+  color: var(--muted);
+}
+button.icon:hover {
+  color: var(--ink);
+}
+
+kbd {
+  font: 0.6875rem/1 var(--mono);
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 0.3125rem;
+}
+
+input,
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  padding: 2px 0.375rem;
+}
+input:focus,
+select:focus {
+  outline: 2px solid var(--sel);
+  border-color: var(--accent);
+}
+
+pre,
+code {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: slashed-zero;
+}
+
+.muted {
+  color: var(--muted);
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* page changes cross-fade (router.svelte.ts starts the view transition) */
+::view-transition-old(root) {
+  animation: 110ms var(--ease) both vt-out;
+}
+::view-transition-new(root) {
+  animation: 200ms var(--ease) 50ms both vt-in;
+}
+@keyframes vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.375rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* doc cards CodeMirror draws: completion docs, hover, parameter hints */
+.doc-card {
+  font: 0.8125rem/1.5 var(--sans);
+  max-width: 28rem;
+}
+.doc-sig {
+  display: block;
+  font: 0.78rem/1.5 var(--mono);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.doc-active {
+  font-weight: 600;
+  color: var(--accent);
+}
+.doc-text {
+  margin-top: 0.25rem;
+  color: var(--ink-2);
+}
+.doc-text code {
+  font-size: 0.75rem;
+  background: var(--surface-2);
+  padding: 0 0.2rem;
+  border-radius: 3px;
+}
+.doc-kind {
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.doc-hint .doc-kind {
+  display: none;
+}
+.doc-rows {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0 1rem;
+  margin-top: 0.375rem;
+  font: 0.75rem/1.6 var(--mono);
+}
+.doc-rows span:nth-child(even) {
+  color: var(--muted);
+}
+
+/* Scrollbars, after VS Code's: a thin rail with no arrows. The thumb always
+   shows, so it's clear an area scrolls; firmer over the area, firmest in hand. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background-clip: padding-box;
+}
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb-hover);
+}
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scroll-thumb-active);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+}
