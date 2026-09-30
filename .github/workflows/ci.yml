@@ -1,6 +1,6 @@
 # Tests, then the image. Only when source changes: the server, the web app, the
-# kernel, the tests, the image and what builds them; not the README, the license
-# or the example settings.
+# kernel, the tests, the image and what builds them; not the README, the license,
+# compose.yaml or the example settings.
 #
 # A tag v1.2.3 publishes the image to ghcr.io/leonardomb1/querier as `1.2.3`,
 # `1.2`, `1` (from 1.0 on) and `latest`, and makes a GitHub release (a tag always
@@ -25,7 +25,6 @@ on:
       - "tsconfig.json"
       - "Dockerfile"
       - ".dockerignore"
-      - "compose.yaml"
       - ".github/workflows/ci.yml"
   pull_request:
     paths: *source

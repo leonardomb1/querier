@@ -257,13 +257,13 @@ Every page, API call, kernel socket and AI token needs a signed-in person.
 ## Running it sandboxed (Docker + Firecracker)
 
 ```sh
-docker compose up -d             # http://localhost:3000, the published image
-docker compose up -d --build     # or built from this checkout
+docker compose up -d             # http://localhost:3000
 ```
 
-Each release (a tag `v0.1.0`) publishes the image to `ghcr.io/leonardomb1/querier`
-as its version and `latest` (`QUERIER_VERSION=0.1.0` in `.env` pins one;
-`docker compose pull` updates).
+It runs the published image, `ghcr.io/leonardomb1/querier`: each release (a tag
+`v0.1.0`) publishes its version and `latest`. `QUERIER_VERSION=0.1.0` in `.env`
+pins one; `docker compose pull` updates. To run a build of this checkout instead,
+tag it as that image first: `docker build -t ghcr.io/leonardomb1/querier:latest .`
 
 Each notebook session runs in its own Firecracker microVM, built and shipped in
 the image (nothing is installed on the host):
