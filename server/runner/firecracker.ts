@@ -7,6 +7,7 @@
 // first frame the host sends carries the session's secrets, which never touch
 // a disk. Network exists only when the notebook allows egress (sandbox-net.ts).
 
+import { statSync } from "node:fs";
 import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { decodeFrames, encodeFrame } from "./protocol";
@@ -82,12 +83,23 @@ function listenVsock(path: string, onDrain: () => void) {
   return { listener, stream, connected };
 }
 
+export function kvmGroups(device = "/dev/kvm"): number[] {
+  try {
+    const s = statSync(device);
+    if ((s.mode & 0o006) === 0o006) return [];
+    return s.gid !== 0 && (s.mode & 0o060) === 0o060 ? [s.gid] : [];
+  } catch {
+    return [];
+  }
+}
+
 export class FirecrackerRunner implements Runner {
   private fc: string;
   private kernel: string;
   private rootfs: string;
   private workRoot: string;
   private user: string | null;
+  private groups: number[];
 
   constructor(o: FirecrackerOptions = {}) {
     this.fc = o.firecracker ?? Bun.which("firecracker") ?? "firecracker";
@@ -95,6 +107,7 @@ export class FirecrackerRunner implements Runner {
     this.rootfs = o.rootfs ?? join(VM, "rootfs.ext4");
     this.workRoot = o.workRoot ?? process.env.QUERIER_VM_WORK ?? "/var/lib/querier/vms";
     this.user = o.user ?? (process.getuid?.() === 0 ? "fc" : null);
+    this.groups = kvmGroups();
   }
 
   private empty?: Promise<string>;
@@ -191,8 +204,10 @@ export class FirecrackerRunner implements Runner {
       }
 
       // Firecracker as the unprivileged user: leaving root drops every capability,
-      // and no-new-privs (here and on the container) means it can't get one back
-      const drop = this.user ? ["setpriv", `--reuid=${this.user}`, `--regid=${this.user}`, "--init-groups", "--no-new-privs", "--inh-caps=-all"] : [];
+      // and no-new-privs (here and on the container) means it can't get one back.
+      // Its groups: /dev/kvm's, when only that group may open it (kvmGroups)
+      const groups = this.groups.length ? `--groups=${this.groups.join(",")}` : "--clear-groups";
+      const drop = this.user ? ["setpriv", `--reuid=${this.user}`, `--regid=${this.user}`, groups, "--no-new-privs", "--inh-caps=-all"] : [];
       proc = Bun.spawn([...drop, this.fc, "--no-api", "--config-file", join(dir, "config.json"), "--id", id], {
         cwd: dir,
         stdin: "ignore",
