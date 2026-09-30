@@ -73,6 +73,86 @@ class Wire:
             self.w.flush()
 
 
+# --- terminals --------------------------------------------------------------
+
+
+class Shells:
+    """Terminals in the sandbox (the host allows them only in a microVM): a shell in
+    a pseudo-terminal each, with the session's environment and the notebook as its
+    folder. Handled beside the job queue, so a running cell never holds one up."""
+
+    def __init__(self, wire, cwd):
+        self.wire, self.cwd = wire, cwd
+        self.open_ = {}  # id -> (pid, fd)
+
+    def handle(self, meta, data):
+        op, sid = meta["op"], meta.get("shell")
+        if op == "shell_open":
+            # a terminal that can't open says why; the kernel goes on
+            try:
+                self.start(sid, meta.get("cols") or 80, meta.get("rows") or 24)
+            except Exception as e:
+                self.wire.send({"type": "shell_output", "shell": sid}, f"The terminal couldn't start: {e}\r\n".encode())
+                self.wire.send({"type": "shell_exit", "shell": sid, "code": None})
+        elif sid in self.open_:
+            pid, fd = self.open_[sid]
+            try:
+                if op == "shell_input":
+                    os.write(fd, data)
+                elif op == "shell_resize":
+                    self.resize(fd, meta.get("cols") or 80, meta.get("rows") or 24)
+                elif op == "shell_close":
+                    os.kill(pid, signal.SIGHUP)
+            except OSError:
+                pass
+
+    @staticmethod
+    def resize(fd, cols, rows):
+        import fcntl
+        import termios
+
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", int(rows), int(cols), 0, 0))
+
+    def start(self, sid, cols, rows):
+        import pty
+
+        shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+        pid, fd = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(self.cwd)
+                env = {**os.environ, "TERM": "xterm-256color", "SHELL": shell, "PS1": r"\[\e[32m\]sandbox\[\e[0m\]:\[\e[34m\]\w\[\e[0m\]\$ "}
+                os.execve(shell, [shell, "--norc", "--noprofile"] if shell.endswith("bash") else [shell], env)
+            finally:
+                os._exit(127)
+        self.resize(fd, cols, rows)
+        self.open_[sid] = (pid, fd)
+        threading.Thread(target=self.pump, args=(sid, pid, fd), daemon=True).start()
+
+    def pump(self, sid, pid, fd):
+        try:
+            while True:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                self.wire.send({"type": "shell_output", "shell": sid}, chunk)
+        finally:
+            self.open_.pop(sid, None)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                _, status = os.waitpid(pid, 0)
+                code = os.waitstatus_to_exitcode(status)
+            except ChildProcessError:
+                code = None
+            self.wire.send({"type": "shell_exit", "shell": sid, "code": code})
+
+
 # --- metrics ----------------------------------------------------------------
 
 
@@ -324,6 +404,7 @@ class Kernel:
         self.sql_rid = None  # the basalt request in flight, for cancel
         self.in_python = False
         self.main_thread = threading.main_thread().ident
+        self.shells = Shells(wire, cwd)
         self.reset_state()
 
     def reset_state(self):
@@ -801,8 +882,10 @@ class Kernel:
     def reader(self):
         try:
             while True:
-                meta, _ = self.wire.read()
-                if meta["op"] == "interrupt":
+                meta, data = self.wire.read()
+                if meta["op"].startswith("shell_"):
+                    self.shells.handle(meta, data)
+                elif meta["op"] == "interrupt":
                     self.interrupt()
                 elif meta["op"] == "metrics":
                     # answered here, not queued: a scrape must not wait behind a running cell

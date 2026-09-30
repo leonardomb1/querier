@@ -11,7 +11,7 @@ import { edges, freshness, plan } from "../shared/graph";
 import { analyze, type Deps } from "./analyze";
 import { encodeFrame } from "./runner/protocol";
 import { checkCli } from "./check";
-import type { CellEvent, CodeLang, Diagnostic, ExportFormat, Inspection, Namespace, Runner, Sandbox, Session } from "./runner/types";
+import type { CellEvent, CodeLang, Diagnostic, ExportFormat, Inspection, Namespace, Runner, Sandbox, Session, Shell } from "./runner/types";
 import { Monitor, parseExposition, type Scope } from "./metrics";
 import { redactor } from "./connections";
 import { cpus, totalmem } from "node:os";
@@ -55,6 +55,8 @@ export type Client = ServerWebSocket<{
   outputs: boolean;
   /** a published report's viewer: their report kernel, not the notebook's */
   report?: boolean;
+  /** editing together (collab.ts): the notebook's shared room, not a kernel */
+  collab?: { canEdit: boolean; recheck?: ReturnType<typeof setInterval> };
 }>;
 
 let batches = 0;
@@ -234,6 +236,64 @@ export class Host {
 
   detach(ws: Client) {
     this.clients.delete(ws);
+    // its terminals end with it
+    for (const t of this.terminals.get(ws)?.values() ?? []) t.close();
+    this.terminals.delete(ws);
+  }
+
+  // -- terminals: a shell in the kernel's microVM, each for the tab that opened it
+
+  private terminals = new Map<Client, Map<string, Shell>>();
+  /** what was typed into a terminal still opening (its kernel starting): given to it once it is */
+  private typedEarly = new Map<string, string[]>();
+
+  async openTerminal(ws: Client, term: string, cols: number, rows: number) {
+    this.touch();
+    const say = (meta: object, data?: Uint8Array) => this.send([ws], { ...meta, term }, data);
+    const early = `${ws.data.sid}\0${term}`;
+    this.typedEarly.set(early, []);
+    let s: Session;
+    try {
+      s = await this.ensureSession();
+    } catch (e: any) {
+      this.typedEarly.delete(early);
+      return say({ type: "terminal-exit", message: e.message });
+    }
+    const typed = this.typedEarly.get(early) ?? [];
+    this.typedEarly.delete(early);
+    if (!this.clients.has(ws)) return;
+    // only a sandbox: a local kernel's shell would be the server's own
+    if (s.info.sandbox !== "firecracker" && process.env.QUERIER_ALLOW_LOCAL_SHELL !== "1")
+      return say({ type: "terminal-exit", message: "Terminals run only in the microVM sandbox, and this kernel runs on the server itself." });
+    const mine = this.terminals.get(ws) ?? this.terminals.set(ws, new Map()).get(ws)!;
+    mine.get(term)?.close();
+    const shell = s.shell(Math.max(10, Math.min(500, cols)), Math.max(2, Math.min(300, rows)), {
+      data: (bytes) => {
+        this.touch();
+        say({ type: "terminal-output" }, bytes);
+      },
+      exit: (code) => {
+        if (mine.get(term) === shell) mine.delete(term);
+        say({ type: "terminal-exit", code, message: this.session === s ? undefined : "The kernel stopped." });
+      },
+    });
+    mine.set(term, shell);
+    for (const text of typed) shell.write(new TextEncoder().encode(text));
+  }
+
+  terminalInput(ws: Client, term: string, text: string) {
+    this.touch();
+    const early = this.typedEarly.get(`${ws.data.sid}\0${term}`);
+    if (early) early.push(text);
+    else this.terminals.get(ws)?.get(term)?.write(new TextEncoder().encode(text));
+  }
+
+  resizeTerminal(ws: Client, term: string, cols: number, rows: number) {
+    this.terminals.get(ws)?.get(term)?.resize(Math.max(10, Math.min(500, cols)), Math.max(2, Math.min(300, rows)));
+  }
+
+  closeTerminal(ws: Client, term: string) {
+    this.terminals.get(ws)?.get(term)?.close();
   }
 
   private setState(cell: string, state: CellState, ms?: number) {

@@ -5,6 +5,8 @@
 import { api, type Action, type ConnectionInfo, type GitStatus, type Lang, type Notebook, type Report } from "./api";
 import { hash } from "../../../shared/hash";
 import { nbHref } from "./href";
+import { Collab } from "./collab.svelte";
+import { session } from "./session.svelte";
 import { NotebookConn, type Diagnostic } from "./conn.svelte";
 import type { HoverInfo } from "./editor";
 import { downstream, edges, freshness, plan, type Ran } from "../../../shared/graph";
@@ -106,6 +108,8 @@ export class NotebookCtl {
   private gitTimer?: ReturnType<typeof setTimeout>;
 
   readonly conn: NotebookConn;
+  /** editing together: the cells' shared text and who is where (not in a published report) */
+  readonly collab: Collab | null = null;
   readonly editors: Record<string, EditorApi> = {};
   /** The editor text from the sidebar goes into. */
   lastEditor: string | null = null;
@@ -127,6 +131,12 @@ export class NotebookCtl {
     if (initial) this.take(initial);
     else this.refresh();
     if (reportMode) return;
+    this.collab = new Collab(name, (cell, text) => {
+      if (this.sources[cell] === text) return;
+      this.sources[cell] = text;
+      this.checkSoon(cell);
+      this.refreshGitSoon(1500);
+    });
     this.refreshConnections();
     this.refreshGit().then(() => {
       if (this.git && !this.git.tracked && !this.git.declined && this.mayEdit) this.gitPrompt = true;
@@ -375,7 +385,8 @@ export class NotebookCtl {
   }
 
   private take(next: Notebook) {
-    for (const c of next.cells) if (!this.dirty.has(c.name)) this.sources[c.name] = c.source;
+    // edited together, the shared text is ahead of the files
+    for (const c of next.cells) if (!this.dirty.has(c.name)) this.sources[c.name] = this.collab?.text(c.name)?.toString() ?? c.source;
     this.book = next;
     if (this.selected && !next.cells.some((c) => c.name === this.selected)) this.selected = null;
   }
@@ -462,8 +473,28 @@ export class NotebookCtl {
     return p;
   }
 
+  /** Everything typed is in the files: before a run, git or a change of cells reads them. */
   flush() {
-    return Promise.all([...new Set([...this.dirty, ...this.saving.keys()])].map((c) => this.save(c)));
+    return Promise.all([...[...new Set([...this.dirty, ...this.saving.keys()])].map((c) => this.save(c)), this.collab?.flush()]);
+  }
+
+  /** The cell's shared text, when edited together: its editors bind to it. */
+  shared(cell: string) {
+    const text = this.collab?.text(cell);
+    return text && this.collab ? { text, collab: this.collab, cell } : undefined;
+  }
+
+  /** Edited together but the room hasn't sent the text yet: the editor waits (a moment). */
+  waitingFor(cell: string) {
+    return !!this.collab && !this.collab.text(cell);
+  }
+
+  /** Who else is here: other people (one's own other tabs aren't someone else). */
+  others = $derived((this.collab?.peers ?? []).filter((p) => p.user.id !== session.me?.id));
+
+  /** Who else is in each cell. */
+  peersIn(cell: string) {
+    return this.others.filter((p) => p.cell === cell);
   }
 
   private async structural(fn: () => Promise<unknown>) {
@@ -623,6 +654,7 @@ export class NotebookCtl {
 
   close() {
     this.flush();
+    this.collab?.close();
     this.conn.close();
   }
 }

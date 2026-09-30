@@ -103,6 +103,13 @@ function decode(buf: ArrayBuffer): { meta: any; data: Uint8Array } {
   return { meta, data: new Uint8Array(buf, 8 + n, m) };
 }
 
+/** A terminal's side of the socket (TerminalView.svelte). */
+export interface TerminalEvents {
+  data(bytes: Uint8Array): void;
+  /** it ended: the shell's exit code, or why it couldn't be (no sandbox, no permission, the kernel stopped) */
+  exit(code: number | null, message?: string): void;
+}
+
 export class NotebookConn {
   runs = $state<Record<string, CellRun>>({});
   session = $state<"none" | "starting" | "ready" | "dead" | "offline">("offline");
@@ -131,6 +138,8 @@ export class NotebookConn {
   private retry = 0;
   private nextId = 1;
   private waiting = new Map<number, (reply: any) => void>();
+  /** open terminals: what they print, and how they end */
+  private terminals = new Map<string, TerminalEvents>();
 
   constructor(
     private nb: string,
@@ -154,6 +163,9 @@ export class NotebookConn {
     ws.onclose = (e) => {
       this.session = "offline";
       this.synced = false;
+      // a terminal lives in the kernel the socket reached: gone with it
+      for (const t of this.terminals.values()) t.exit(null, "Disconnected from the server.");
+      this.terminals.clear();
       // the session ended (signed out, expired, the account disabled): sign in again, then back here
       // the report isn't published any more: nothing to reconnect to
       if (e.code === 4404) {
@@ -244,9 +256,16 @@ export class NotebookConn {
       case "notebook":
         this.onNotebookChanged();
         break;
+      case "terminal-output":
+        this.terminals.get(meta.term)?.data(data);
+        break;
+      case "terminal-exit":
+        this.terminals.get(meta.term)?.exit(meta.code ?? null, meta.message);
+        this.terminals.delete(meta.term);
+        break;
       // (a completion, a check, a table's rows: answered empty where they were asked)
       case "denied":
-        if (!["complete", "check", "inspect", "filter"].includes(meta.op)) this.onnotice?.(meta.message);
+        if (!["complete", "check", "inspect", "filter", "terminal-open", "terminal-input", "terminal-resize", "terminal-close"].includes(meta.op)) this.onnotice?.(meta.message);
         break;
       // renamed or deleted, here or in another tab: follow it, or go back to the list
       case "moved":
@@ -259,6 +278,26 @@ export class NotebookConn {
     }
   }
 
+
+  // -- terminals: a shell in this person's kernel's sandbox
+
+  openTerminal(term: string, cols: number, rows: number, on: TerminalEvents) {
+    this.terminals.set(term, on);
+    this.send({ op: "terminal-open", term, cols, rows });
+  }
+
+  terminalInput(term: string, data: string) {
+    if (this.terminals.has(term)) this.send({ op: "terminal-input", term, data });
+  }
+
+  resizeTerminal(term: string, cols: number, rows: number) {
+    if (this.terminals.has(term)) this.send({ op: "terminal-resize", term, cols, rows });
+  }
+
+  closeTerminal(term: string) {
+    if (!this.terminals.delete(term)) return;
+    this.send({ op: "terminal-close", term });
+  }
 
   private send(msg: object) {
     const text = JSON.stringify(msg);

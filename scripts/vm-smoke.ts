@@ -33,6 +33,16 @@ say(`  writes stay inside: ${(await run(s, "w", "python", "open('/notebook/new.t
 const probe = (target: string, host = JSON.stringify(target.split(":")[0])) =>
   `import socket\ns = socket.socket(); s.settimeout(3)\ntry:\n    s.connect((${host}, ${Number(target.split(":")[1])}))\n    print('reached')\nexcept Exception as e:\n    print('blocked:', type(e).__name__)`;
 say(`  no egress, github.com:443: ${(await run(s, "n", "python", probe("140.82.112.3:443"))).text}`);
+// a terminal: a shell in the VM, with the session's environment, while nothing else runs
+{
+  let out = "";
+  const code = await new Promise<number | null>((exit) => {
+    const sh = s.shell(80, 24, { data: (b) => (out += new TextDecoder().decode(b)), exit });
+    sh.write(new TextEncoder().encode('echo "user=$(id -u) cwd=$PWD secret=${SMOKE_SECRET:+set}"; exit 7\n'));
+    setTimeout(() => sh.close(), 10_000);
+  });
+  say(`  terminal: ${out.match(/user=\S+ cwd=\S+ secret=\S*/)?.[0] ?? JSON.stringify(out.slice(-120))}, exit ${code}`);
+}
 await s.close();
 
 t = Date.now();

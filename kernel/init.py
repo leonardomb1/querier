@@ -42,6 +42,11 @@ def main():
     sh("mount", "-t", "sysfs", "sys", "/sys")
     sh("mount", "-t", "tmpfs", "-o", "mode=1777,size=50%", "tmp", "/tmp")
     sh("mount", "-t", "tmpfs", "-o", "mode=0755,size=16m", "run", "/run")
+    # pseudo-terminals, for the terminals the host opens (kernel.py's Shells)
+    os.makedirs("/dev/pts", exist_ok=True)
+    sh("mount", "-t", "devpts", "-o", "newinstance,ptmxmode=0666,mode=0620", "devpts", "/dev/pts")
+    if not os.path.exists("/dev/ptmx"):
+        os.symlink("pts/ptmx", "/dev/ptmx")
 
     # /etc/hosts: the host hands over the names a sandbox may reach (no DNS inside)
     with open("/run/hosts", "w") as f:

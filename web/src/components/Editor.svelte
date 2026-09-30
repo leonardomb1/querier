@@ -11,6 +11,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { Lang } from "../lib/api";
+  import type { Collab } from "../lib/collab.svelte";
   import type { Completion } from "../lib/conn.svelte";
   import type { HoverInfo } from "../lib/editor";
   import { fonts } from "../lib/fonts.svelte";
@@ -52,6 +53,8 @@
     templateCompletion?: (doc: string, pos: number) => TemplateResult;
     /** They may read it, not change it. */
     readOnly?: boolean;
+    /** Edited together (lib/collab.svelte.ts): the cell's shared text. Edits go into it, not `onchange`. */
+    shared?: { text: import("yjs").Text; collab: Collab; cell: string };
   }
   let {
     value,
@@ -72,6 +75,7 @@
     oncursor,
     templateCompletion,
     readOnly = false,
+    shared,
   }: Props = $props();
 
   type Monaco = typeof import("monaco-editor/editor/editor.api");
@@ -90,6 +94,20 @@
   const subs: { dispose(): void }[] = [];
   let gitMarks: import("monaco-editor/editor/editor.api").editor.IEditorDecorationsCollection | null = null;
   let destroyed = false;
+  /** the binding to the shared text, while edited together */
+  let bound: { paint(): void; dispose(): void } | null = null;
+  let boundTo: unknown = null;
+  let cobind: typeof import("../lib/cobind") | null = null;
+
+  /** Bind to the shared text (or let go of it): after the editor is built, and when it arrives. */
+  function rebind() {
+    bound?.dispose();
+    bound = null;
+    boundTo = null;
+    if (!shared || !editor || !model || !M || !cobind) return;
+    bound = cobind.bindShared(M, editor, model, shared.text, shared.collab, shared.cell);
+    boundTo = shared.text;
+  }
 
   const mono = () => getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace";
   const fontSize = () => Math.round(13 * zoom.value * 10) / 10;
@@ -188,6 +206,8 @@
   /** The plain editor, or the inline diff against the last commit. */
   function build(withDiff: boolean) {
     const monaco = M!;
+    bound?.dispose();
+    bound = null;
     for (const s of subs.splice(0)) s.dispose();
     const hadFocus = editor?.hasTextFocus() ?? false;
     const at = editor?.getPosition();
@@ -219,6 +239,7 @@
     layout();
     if (at) editor!.setPosition(at);
     if (hadFocus) editor!.focus();
+    rebind();
   }
 
   // -- change marks beside the lines, against the last commit (VS Code's dirty diff)
@@ -240,13 +261,15 @@
     let resize: ResizeObserver | undefined;
     (async () => {
       lib = await import("../lib/monaco");
+      if (shared) cobind = await import("../lib/cobind");
       M = await lib.loadMonaco();
       if (destroyed) return;
       model = M.editor.createModel(value, lib.LANG_ID[lang]);
       subs.push({ dispose: lib.attachHooks(model, { lang, complete, hover, template: templateCompletion }) });
       const modelSub = model.onDidChangeContent(() => {
         const v = model!.getValue();
-        if (v !== value) onchange(v);
+        // shared: the text goes to the room (cobind.ts), which tells the notebook; never saved from here
+        if (!shared && v !== value) onchange(v);
         clearTimeout(gitTimer);
         gitTimer = setTimeout(paintGit, 150);
       });
@@ -266,6 +289,7 @@
     })();
     return () => {
       destroyed = true;
+      bound?.dispose();
       resize?.disconnect();
       clearTimeout(gitTimer);
       for (const s of subs.splice(0)) s.dispose();
@@ -276,10 +300,22 @@
     };
   });
 
-  // Take outside changes (a reload, another tab, a rename) unless the user is typing here.
+  // Take outside changes (a reload, another tab, a rename) unless the user is typing here;
+  // edited together, the shared text brings them
   $effect(() => {
     const v = value;
-    if (mounted && model && !editor?.hasTextFocus() && v !== model.getValue()) model.setValue(v);
+    if (mounted && model && !bound && !shared && !editor?.hasTextFocus() && v !== model.getValue()) model.setValue(v);
+  });
+
+  // the shared text arrives (or goes), and the others move
+  $effect(() => {
+    const text = shared?.text;
+    void shared?.collab.peers;
+    if (!mounted) return;
+    if (text !== boundTo) {
+      if (text && !cobind) import("../lib/cobind").then((m) => ((cobind = m), rebind()));
+      else rebind();
+    } else bound?.paint();
   });
 
   // the last commit: change marks always, the inline diff when asked for

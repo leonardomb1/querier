@@ -2,7 +2,7 @@
 // runner hands it a process's pipes; the microVM runner will hand it a vsock.
 
 import { encodeFrame, type Frame } from "./protocol";
-import type { CellEvent, CellSpec, CodeLang, Completion, Diagnostic, ExportFormat, Inspection, Namespace, Session } from "./types";
+import type { CellEvent, CellSpec, CodeLang, Completion, Diagnostic, ExportFormat, Inspection, Namespace, Session, Shell, ShellEvents } from "./types";
 
 export interface Transport {
   send(frame: Uint8Array): void;
@@ -45,6 +45,7 @@ export class KernelSession implements Session {
   readonly id: string;
   readonly closed: Promise<void>;
   private pending = new Map<number, Chan<any>>();
+  private shells = new Map<string, ShellEvents>();
   private dead?: string;
   /** Versions the kernel reported at start. */
   info: Record<string, string> = {};
@@ -74,6 +75,16 @@ export class KernelSession implements Session {
   private async pump() {
     const drain = (async () => {
       for await (const { meta, data } of this.t.frames) {
+        // a terminal's output isn't the answer to a request
+        if (meta.type === "shell_output") {
+          this.shells.get(meta.shell)?.data(data);
+          continue;
+        }
+        if (meta.type === "shell_exit") {
+          this.shells.get(meta.shell)?.exit(meta.code ?? null);
+          this.shells.delete(meta.shell);
+          continue;
+        }
         const chan = this.pending.get(meta.id ?? 0);
         if (!chan) continue;
         const { id: _, ...ev } = meta;
@@ -89,6 +100,8 @@ export class KernelSession implements Session {
     const reason = await this.t.exited;
     await drain.catch(() => {});
     this.dead = reason ?? "kernel exited";
+    for (const sh of this.shells.values()) sh.exit(null);
+    this.shells.clear();
     for (const chan of this.pending.values()) {
       chan.push({ type: "error", message: this.dead });
       chan.push({ type: "done", ok: false, ms: 0 });
@@ -200,6 +213,21 @@ export class KernelSession implements Session {
 
   async reset() {
     for await (const msg of this.request("reset")) if (msg.type === "error") throw new Error(msg.message);
+  }
+
+  shell(cols: number, rows: number, on: ShellEvents): Shell {
+    const shell = `sh${nextId++}`;
+    const send = (meta: object, data?: Uint8Array) => !this.dead && this.t.send(encodeFrame({ ...meta, shell }, data));
+    if (this.dead) queueMicrotask(() => on.exit(null));
+    else {
+      this.shells.set(shell, on);
+      send({ op: "shell_open", cols, rows });
+    }
+    return {
+      write: (bytes) => send({ op: "shell_input" }, bytes),
+      resize: (c, r) => send({ op: "shell_resize", cols: c, rows: r }),
+      close: () => send({ op: "shell_close" }),
+    };
   }
 
   async close() {

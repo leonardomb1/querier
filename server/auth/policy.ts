@@ -31,6 +31,8 @@ export const ACTIONS = {
   "notebook.view": ["Notebook"],
   "notebook.readCode": ["Notebook"],
   "notebook.run": ["Notebook"],
+  // a terminal in one's own kernel's microVM: what running can do, typed by hand
+  "notebook.shell": ["Notebook"],
   "notebook.edit": ["Notebook"],
   "notebook.delete": ["Notebook"],
   "notebook.share": ["Notebook"],
@@ -52,7 +54,7 @@ export const ALL_ACTIONS = Object.keys(ACTIONS) as Action[];
 // -- roles: what each grants (docs: the plan's table)
 
 const VIEWER: Action[] = ["workspace.view", "notebook.view", "notebook.readCode", "report.view"];
-const CONTRIBUTOR: Action[] = [...VIEWER, "notebook.create", "notebook.run", "notebook.edit", "notebook.delete", "git.pull", "git.push", "connection.use"];
+const CONTRIBUTOR: Action[] = [...VIEWER, "notebook.create", "notebook.run", "notebook.shell", "notebook.edit", "notebook.delete", "git.pull", "git.push", "connection.use"];
 const MEMBER: Action[] = [...CONTRIBUTOR, "notebook.share", "sandbox.manage", "environment.manage", "connection.manage", "ai.configure", "workspace.manageAccess"];
 const ADMIN: Action[] = [...MEMBER, "workspace.manage"];
 export const WORKSPACE_ROLES = { Admin: ADMIN, Member: MEMBER, Contributor: CONTRIBUTOR, Viewer: VIEWER } as const;
@@ -60,7 +62,7 @@ export type WorkspaceRole = keyof typeof WORKSPACE_ROLES;
 export const ROLE_ORDER: WorkspaceRole[] = ["Viewer", "Contributor", "Member", "Admin"];
 
 const READ: Action[] = ["notebook.view", "notebook.readCode", "report.view"];
-const RUN: Action[] = [...READ, "notebook.run"];
+const RUN: Action[] = [...READ, "notebook.run", "notebook.shell"];
 const EDIT: Action[] = [...RUN, "notebook.edit", "git.pull", "git.push"];
 const RESHARE: Action[] = [...EDIT, "notebook.share"];
 export const SHARE_LEVELS = { Read: READ, Run: RUN, Edit: EDIT, Reshare: RESHARE } as const;

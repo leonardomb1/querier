@@ -4,6 +4,7 @@
 
 import { join, resolve } from "node:path";
 import { Host, type CellOutput, type Client } from "./host";
+import { Rooms } from "./collab";
 import { encodeFrame } from "./runner/protocol";
 import { FirecrackerRunner } from "./runner/firecracker";
 import { LocalRunner } from "./runner/local";
@@ -140,10 +141,16 @@ const changed = (nb: string) => {
     h.broadcast({ type: "notebook" });
     h.analyzeSoon();
   }
+  void rooms.changed(nb);
 };
+// editing together (collab.ts): a room per open notebook writes its cells, then its kernels' graph catches up
+const rooms = new Rooms(store, (nb) => {
+  for (const h of hostsOf(nb)) h.analyzeSoon();
+});
 
 /** Tell a notebook's open tabs (everyone's) where it went, or that it's gone, and stop its kernels. */
 async function closeHost(nb: string, message: object) {
+  rooms.drop(nb);
   for (const [key, h] of [...hosts]) {
     if (h.nb !== nb) continue;
     h.broadcast(message);
@@ -281,6 +288,7 @@ const idOf = (r: { params: Record<string, string> }) => {
 
 /** Every open notebook of a workspace: told where it went, and its kernel stopped. */
 async function closeWorkspace(ws: string, message: (id: string) => object) {
+  rooms.dropWhere((nb) => nb.startsWith(`${ws}/`));
   for (const id of new Set([...hosts.values()].map((h) => h.nb))) if (id.startsWith(`${ws}/`)) await closeHost(id, message(id));
 }
 
@@ -299,8 +307,15 @@ async function connectionsChanged(scope: { ws?: string; owner?: string } | null)
 }
 
 // AI clients over MCP (mcp/): each request its own stateless server
+// (a notebook they read is as it is typed: what the room holds is written first)
+const mcpStore: Store = Object.assign(Object.create(store), {
+  load: async (id: string) => {
+    await rooms.flush(id);
+    return store.load(id);
+  },
+});
 const mcpCtx: Omit<Ctx, "may" | "host"> = {
-  store,
+  store: mcpStore,
   access,
   hosts: hostsOf,
   changed,
@@ -373,6 +388,7 @@ const WORDS: Partial<Record<Action, string>> = {
   "notebook.view": "see this notebook",
   "notebook.readCode": "read this notebook's code",
   "notebook.run": "run this notebook",
+  "notebook.shell": "open a terminal in this notebook's kernel",
   "notebook.edit": "edit this notebook",
   "notebook.delete": "delete this notebook",
   "notebook.share": "share this notebook",
@@ -631,6 +647,10 @@ const SOCKET_NEEDS = {
   inspect: "notebook.run",
   filter: "notebook.run",
   check: "notebook.readCode",
+  "terminal-open": "notebook.shell",
+  "terminal-input": "notebook.shell",
+  "terminal-resize": "notebook.shell",
+  "terminal-close": "notebook.shell",
 } as const satisfies Record<string, Action>;
 
 /** A refused socket message: answered, so the page isn't left waiting. */
@@ -641,6 +661,7 @@ function refuseSocket(ws: Client, msg: { op?: string; id?: number }, action: Act
   else if (msg.op === "check") frame({ type: "check", id: msg.id, diagnostics: [] });
   else if (msg.op === "inspect") frame({ type: "inspect", id: msg.id, columns: [], rows: [], error: message });
   else if (msg.op === "filter") frame({ type: "filtered", id: msg.id, error: message });
+  else if (msg.op === "terminal-open") frame({ type: "terminal-exit", term: (msg as any).term, message });
   frame({ type: "denied", op: msg.op, message });
 }
 /** What each report-socket message needs: running the published cells is viewing the report. The
@@ -967,6 +988,7 @@ const server = Bun.serve<Client["data"], any>({
     },
     "/api/workspaces/:ws/notebooks/:nb/cells": {
       POST: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
+        await rooms.flush(r.params.nb);
         const name = await store.add(r.params.nb, b.lang, b.after ?? null, b.source ?? "");
         changed(r.params.nb);
         return { name };
@@ -975,10 +997,11 @@ const server = Bun.serve<Client["data"], any>({
     "/api/workspaces/:ws/notebooks/:nb/cells/:cell": {
       PUT: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
         await store.save(r.params.nb, r.params.cell, b.source);
-        for (const h of hostsOf(r.params.nb)) h.analyzeSoon();
+        changed(r.params.nb);
       }),
       PATCH: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
         const { nb, cell } = r.params;
+        await rooms.flush(nb);
         let updated: string[] = [];
         if (b.name && b.name !== cell) {
           updated = await store.rename(nb, cell, b.name);
@@ -990,6 +1013,7 @@ const server = Bun.serve<Client["data"], any>({
         return { updated };
       }),
       DELETE: api({ on: "notebook", action: "notebook.edit" }, async (r) => {
+        await rooms.flush(r.params.nb);
         await store.remove(r.params.nb, r.params.cell);
         for (const h of hostsOf(r.params.nb)) await h.removed(r.params.cell);
         changed(r.params.nb);
@@ -1209,10 +1233,15 @@ const server = Bun.serve<Client["data"], any>({
       }),
     },
     "/api/workspaces/:ws/notebooks/:nb/git/decline": { POST: api({ on: "notebook", action: "notebook.edit" }, async (r) => store.settings(nbParam(r), { git: false })) },
-    "/api/workspaces/:ws/notebooks/:nb/git/commit": { POST: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => gitOf(nbParam(r), r.session.principal).commit(String(b.message ?? ""))) },
+    "/api/workspaces/:ws/notebooks/:nb/git/commit": { POST: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
+        await rooms.flush(nbParam(r));
+        return gitOf(nbParam(r), r.session.principal).commit(String(b.message ?? ""));
+      }),
+    },
     "/api/workspaces/:ws/notebooks/:nb/git/restore": {
       POST: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
         const nb = nbParam(r);
+        await rooms.flush(nb);
         await gitOf(nb, r.session.principal).restore(b.rev ?? "HEAD", b.cells);
         changed(nb); // git rewrote files: every tab reloads them
       }),
@@ -1226,6 +1255,7 @@ const server = Bun.serve<Client["data"], any>({
     "/api/workspaces/:ws/notebooks/:nb/git/switch": {
       POST: api({ on: "notebook", action: "notebook.edit" }, async (r, b) => {
         const nb = nbParam(r);
+        await rooms.flush(nb);
         await gitOf(nb, r.session.principal).switchBranch(String(b.name ?? ""));
         changed(nb); // git rewrote files: every tab reloads them
       }),
@@ -1235,6 +1265,7 @@ const server = Bun.serve<Client["data"], any>({
     "/api/workspaces/:ws/notebooks/:nb/git/pull": {
       POST: api({ on: "notebook", action: "git.pull" }, async (r, b) => {
         const nb = nbParam(r);
+        await rooms.flush(nb);
         await gitOf(nb, r.session.principal).pull(!!b.rebase);
         changed(nb); // git rewrote files: every tab reloads them
       }),
@@ -1609,6 +1640,26 @@ const server = Bun.serve<Client["data"], any>({
         return srv.upgrade(req, { data: { nb, sid: s.idHash, principal: s.principal, outputs: true, report: true } }) ? undefined : new Response("upgrade failed", { status: 400 });
       })();
     },
+    // editing together: anyone who may see the notebook is present; who may edit it changes it
+    "/ws/:ws/:nb/collab": (req, srv) => {
+      const nb = `${(req as any).params.ws}/${(req as any).params.nb}`;
+      const origin = req.headers.get("origin");
+      if (origin && !ownOrigin(req, origin)) return new Response("Forbidden origin", { status: 403 });
+      try {
+        store.dir(nb);
+      } catch {
+        return new Response("bad notebook", { status: 400 });
+      }
+      return (async () => {
+        const s = await signedIn(req);
+        if (s instanceof Response) return s;
+        const r = await authz.notebook(nb);
+        if (!authz.can(s.principal, "notebook.view", r) || !authz.can(s.principal, "notebook.readCode", r))
+          return Response.json({ error: "You don't have permission to see this notebook." }, { status: 403 });
+        const collab = { canEdit: authz.can(s.principal, "notebook.edit", r, true) };
+        return srv.upgrade(req, { data: { nb, sid: s.idHash, principal: s.principal, outputs: false, collab } }) ? undefined : new Response("upgrade failed", { status: 400 });
+      })();
+    },
     "/ws/:ws/:nb": (req, srv) => {
       const nb = `${(req as any).params.ws}/${(req as any).params.nb}`;
       // a socket runs cells: only Querier's own pages open one (browsers always send Origin here)
@@ -1653,6 +1704,14 @@ const server = Bun.serve<Client["data"], any>({
   websocket: {
     open(ws: Client) {
       (sockets.get(ws.data.sid) ?? sockets.set(ws.data.sid, new Set()).get(ws.data.sid)!).add(ws);
+      if (ws.data.collab) {
+        const c = ws.data.collab;
+        // who may edit is asked again every few seconds: a revoked grant stops their edits soon
+        c.recheck = setInterval(async () => {
+          c.canEdit = authz.can(ws.data.principal, "notebook.edit", await authz.notebook(ws.data.nb), true);
+        }, 5000);
+        return void rooms.join(ws.data.nb, ws, ws.data.principal, () => c.canEdit).catch(() => ws.close(4404, "no notebook"));
+      }
       try {
         (ws.data.report ? reportHostOf(ws.data.nb, ws.data.principal) : hostOf(ws.data.nb, ws.data.principal)).attach(ws);
       } catch (e: any) {
@@ -1663,9 +1722,14 @@ const server = Bun.serve<Client["data"], any>({
     close(ws: Client) {
       sockets.get(ws.data.sid)?.delete(ws);
       if (!sockets.get(ws.data.sid)?.size) sockets.delete(ws.data.sid);
+      if (ws.data.collab) {
+        clearInterval(ws.data.collab.recheck);
+        return void rooms.leave(ws.data.nb, ws);
+      }
       hosts.get(ws.data.report ? reportKey(ws.data.nb, ws.data.principal.id) : hostKey(ws.data.nb, ws.data.principal.id))?.detach(ws);
     },
     async message(ws: Client, raw) {
+      if (ws.data.collab) return rooms.message(ws.data.nb, ws, typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw));
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
       if (ws.data.report) return void (await reportMessage(ws, msg));
       const h = hostOf(ws.data.nb, ws.data.principal);
@@ -1674,6 +1738,7 @@ const server = Bun.serve<Client["data"], any>({
       if (!action || !authz.can(ws.data.principal, action, await authz.notebook(ws.data.nb))) return refuseSocket(ws, msg, action);
       switch (msg.op) {
         case "run":
+          await rooms.flush(ws.data.nb);
           return void h.run(msg.cells, msg.params ?? {});
         case "interrupt":
           return h.interrupt();
@@ -1687,6 +1752,15 @@ const server = Bun.serve<Client["data"], any>({
           return h.checkFor(ws, msg.id, msg.source, msg.cell);
         case "filter":
           return h.filterFor(ws, msg.id, msg.cell, msg.terms ?? []);
+        case "terminal-open":
+          auth.audit.log({ actor: ws.data.principal.id, action: "terminal.open", detail: { notebook: ws.data.nb } });
+          return h.openTerminal(ws, String(msg.term), Number(msg.cols) || 80, Number(msg.rows) || 24);
+        case "terminal-input":
+          return h.terminalInput(ws, String(msg.term), String(msg.data ?? ""));
+        case "terminal-resize":
+          return h.resizeTerminal(ws, String(msg.term), Number(msg.cols) || 80, Number(msg.rows) || 24);
+        case "terminal-close":
+          return h.closeTerminal(ws, String(msg.term));
       }
     },
   },

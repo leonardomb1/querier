@@ -6,10 +6,20 @@
   import Icon from "../Icon.svelte";
   import Menu from "../Menu.svelte";
   import Outputs from "../Outputs.svelte";
+  import TerminalView from "./TerminalView.svelte";
 
-  // The panel under the editors: Results (the output of the cell you are on) and
-  // Problems (every cell's, and the template's).
+  // The panel under the editors: Results (the output of the cell you are on),
+  // Problems (every cell's, and the template's) and Terminal (a shell in one's kernel).
   let { ctl, wb, tpl }: { ctl: NotebookCtl; wb: Workbench; tpl: TemplateCtl } = $props();
+
+  // the terminal: for who may open one; once opened it lives on behind the other tabs
+  const mayShell = $derived(ctl.may("notebook.shell") && !ctl.reportMode);
+  let terminalOpened = $state(false);
+  let terminal = $state<ReturnType<typeof TerminalView>>();
+  $effect(() => {
+    if (wb.panelTab === "terminal" && mayShell) terminalOpened = true;
+  });
+  const tab = $derived(wb.panelTab === "terminal" && !mayShell ? "results" : wb.panelTab);
 
   // the cell whose results show: the active editor's, else the notebook's selected cell
   const cell = $derived.by(() => {
@@ -45,9 +55,16 @@
       <button role="tab" aria-selected={wb.panelTab === "problems"} class:on={wb.panelTab === "problems"} onclick={() => ((wb.panelTab = "problems"), wb.save())}>
         Problems{#if errors + warnings}<span class="badge">{errors + warnings}</span>{/if}
       </button>
+      {#if mayShell}
+        <button role="tab" aria-selected={tab === "terminal"} class:on={tab === "terminal"} title="A shell in your kernel's sandbox  (Ctrl+`)" onclick={() => ((wb.panelTab = "terminal"), wb.save())}>Terminal</button>
+      {/if}
     </div>
-    {#if wb.panelTab === "results" && cell}<span class="context">{fileOf(cell)}{status ? ` · ${status}` : ""}</span>{/if}
+    {#if tab === "terminal"}<span class="context">sandbox</span>{/if}
+    {#if tab === "results" && cell}<span class="context">{fileOf(cell)}{status ? ` · ${status}` : ""}</span>{/if}
     <span class="acts">
+      {#if tab === "terminal" && terminal}
+        <button class="icon" title="New Shell (ends this one)" aria-label="Start a new shell" onclick={() => terminal?.restart()}><Icon name="debug-restart" size={16} /></button>
+      {/if}
       <Menu
         title="Views and more actions"
         items={[
@@ -62,8 +79,11 @@
     </span>
   </div>
 
-  <div class="body">
-    {#if wb.panelTab === "results"}
+  <div class="body" class:term={tab === "terminal"}>
+    {#if terminalOpened}<TerminalView bind:this={terminal} {ctl} visible={tab === "terminal"} />{/if}
+    {#if tab === "terminal"}
+      <!-- the terminal, above -->
+    {:else if tab === "results"}
       {#if !cell}
         <p class="empty">Open a cell, or select one in the notebook, to see its results here.</p>
       {:else if run?.outputs.length}
@@ -100,6 +120,11 @@
 </section>
 
 <style>
+  /* the terminal fills the panel, and scrolls itself */
+  .body.term {
+    overflow: hidden;
+    padding: 0;
+  }
   .panel {
     display: flex;
     flex-direction: column;

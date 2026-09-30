@@ -20,7 +20,7 @@ export type Tab =
   | { kind: "settings" };
 
 export type View = "explorer" | "search" | "scm" | "data";
-export type PanelTab = "results" | "problems";
+export type PanelTab = "results" | "problems" | "terminal";
 export type PanelPosition = "bottom" | "right";
 
 export interface Group {

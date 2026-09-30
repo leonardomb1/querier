@@ -23,6 +23,7 @@
   import SearchView from "./SearchView.svelte";
   import StatusBar from "./StatusBar.svelte";
   import TitleBar from "./TitleBar.svelte";
+  import Avatars, { people } from "../Avatars.svelte";
   import ManageAccess from "../auth/ManageAccess.svelte";
   import CredentialsDialog from "../connections/CredentialsDialog.svelte";
 
@@ -117,6 +118,14 @@
     if (!mod) return;
     const k = e.key.toLowerCase();
     const act = (fn: () => void) => (e.preventDefault(), e.stopPropagation(), fn());
+    // Ctrl+`: the terminal, as VS Code's
+    if (e.key === "`" && ctl.may("notebook.shell")) return act(() => wb.togglePanel("terminal"));
+    // in a terminal, the keys are the shell's (Ctrl+K, Ctrl+B, Ctrl+E…), but for the palette and the panel
+    if ((e.target as HTMLElement | null)?.closest?.(".xterm")) {
+      if (e.shiftKey && k === "p") return act(() => (ctl.palette = !ctl.palette));
+      if (!e.shiftKey && k === "j") return act(() => wb.togglePanel());
+      return;
+    }
     if (k === "k" || (e.shiftKey && k === "p")) return act(() => (ctl.palette = !ctl.palette));
     if (e.shiftKey && e.key === "Enter") return act(() => ctl.runAll());
     if (e.shiftKey && k === "e") return act(() => wb.showView("explorer"));
@@ -141,6 +150,9 @@
     center={ctl.book?.title ?? ctl.name}
     oncenter={() => (ctl.palette = true)}
   >
+    {#if ctl.others.length}
+      <span class="present"><Avatars users={people(ctl.others.map((p) => p.user))} label="has this notebook open" /></span>
+    {/if}
     {#if ctl.may("notebook.share")}
       <button class="icon" title="Share this notebook" aria-label="Share this notebook" onclick={() => (ctl.sharing = true)}>
         <Icon name="person-add" size={16} />
@@ -245,6 +257,12 @@
 {#if wb.commit}<CommitDialog {ctl} hash={wb.commit} onclose={() => (wb.commit = null)} />{/if}
 
 <style>
+  /* who else has the notebook open, beside the title bar's buttons */
+  .present {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 0.375rem;
+  }
   /* the workbench is the window: nothing scrolls but its parts */
   :global(html.workbench),
   :global(html.workbench body) {

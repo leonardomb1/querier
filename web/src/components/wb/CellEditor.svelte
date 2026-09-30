@@ -56,7 +56,8 @@
       value={source}
       lang={spec.lang}
       marks={ctl.marksFor(cell)}
-      readOnly={!ctl.mayEdit}
+      shared={ctl.shared(cell)}
+      readOnly={!ctl.mayEdit || ctl.waitingFor(cell)}
       onchange={(s) => ctl.edit(cell, s)}
       onrun={() => run()}
       onfocus={() => {

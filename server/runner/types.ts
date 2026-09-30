@@ -119,10 +119,24 @@ export interface Session {
   metrics(): Promise<string>;
   /** Forget every table and declaration, keeping the process. */
   reset(): Promise<void>;
+  /** A terminal in the kernel's sandbox: a shell with the session's environment. */
+  shell(cols: number, rows: number, on: ShellEvents): Shell;
   close(): Promise<void>;
   readonly closed: Promise<void>;
   /** What the kernel reported at start: python, polars and basalt versions. */
   readonly info: Record<string, string>;
+}
+
+export interface ShellEvents {
+  data(bytes: Uint8Array): void;
+  /** the shell ended (exit, or the kernel went): its exit code, if known */
+  exit(code: number | null): void;
+}
+
+export interface Shell {
+  write(bytes: Uint8Array): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
 }
 
 /** A notebook's sandbox (notebook.json `sandbox`): used by the microVM runner. */

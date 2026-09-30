@@ -682,3 +682,55 @@ code {
 .settings-controls .sub code {
   font-size: 0.72rem;
 }
+
+/* editing together (lib/collab.svelte.ts): each person's color, their cursor and selection in
+   a cell's editor (lib/cobind.ts), with their name over the cursor */
+:root {
+  --peer-0: #e5484d;
+  --peer-1: #e2640f;
+  --peer-2: #b8860b;
+  --peer-3: #2b9a66;
+  --peer-4: #0e9384;
+  --peer-5: #1e7de0;
+  --peer-6: #8e4ec6;
+  --peer-7: #d6409f;
+}
+.q-peer-c0 { --peer: var(--peer-0); }
+.q-peer-c1 { --peer: var(--peer-1); }
+.q-peer-c2 { --peer: var(--peer-2); }
+.q-peer-c3 { --peer: var(--peer-3); }
+.q-peer-c4 { --peer: var(--peer-4); }
+.q-peer-c5 { --peer: var(--peer-5); }
+.q-peer-c6 { --peer: var(--peer-6); }
+.q-peer-c7 { --peer: var(--peer-7); }
+.q-peer-sel {
+  background: color-mix(in srgb, var(--peer) 22%, transparent);
+}
+.q-peer-head {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1lh;
+  vertical-align: top;
+  border-left: 2px solid var(--peer);
+  margin-left: -1px;
+}
+.q-peer-head::after {
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  padding: 0 0.3em;
+  font: 600 0.625rem/1.5 var(--sans);
+  white-space: nowrap;
+  color: #fff;
+  background: var(--peer);
+  border-radius: 3px 3px 3px 0;
+  pointer-events: none;
+  z-index: 10;
+}
+/* on a cell's first line there is no room above: the name goes below */
+.q-peer-head.q-peer-below::after {
+  top: 100%;
+  bottom: auto;
+  border-radius: 0 3px 3px 3px;
+}

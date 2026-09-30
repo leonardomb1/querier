@@ -6,6 +6,7 @@
   import { hash } from "../../../shared/hash";
   import { api, nbUrl, type Cell } from "../lib/api";
   import type { NotebookCtl } from "../lib/notebook.svelte";
+  import Avatars, { people } from "./Avatars.svelte";
   import Editor, { type Mark } from "./Editor.svelte";
   import Icon from "./Icon.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
@@ -31,6 +32,9 @@
   const autofocus = $derived(ctl.focusOnMount === name);
   const showEditor = $derived(!isMd || editingMd || !source.trim() || autofocus);
   const reads = $derived(ctl.up[name] ?? []);
+  // editing together: who else is in this cell (their color on its border), and its shared text
+  const here = $derived(people(ctl.peersIn(name).map((p) => p.user)));
+  const shared = $derived(ctl.shared(name));
   // git: how this cell differs from the last commit, and that version
   const change = $derived(ctl.changeOf(name));
   const committed = $derived(
@@ -218,14 +222,16 @@
       {lines} {lines === 1 ? "line" : "lines"} hidden
     </button>
   {:else if showEditor}
-    <div class="code" transition:slide={{ duration: 150, easing: cubicOut }}>
+    <div class="code {here.length ? `peered q-peer-c${here[0].color}` : ''}" transition:slide={{ duration: 150, easing: cubicOut }}>
+      {#if here.length}<span class="peers"><Avatars users={here} label="is editing" /></span>{/if}
       <Editor
         bind:this={editor}
         value={source}
         lang={cell.lang}
+        {shared}
+        readOnly={!ctl.mayEdit || ctl.waitingFor(name)}
         {marks}
         {autofocus}
-        readOnly={!ctl.mayEdit}
         onchange={(s) => ctl.edit(name, s)}
         onrun={(advance) => {
           if (isMd) editingMd = false;
@@ -249,7 +255,10 @@
     </div>
   {:else}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="prose" ondblclick={() => ctl.select(name, "edit")}>{@html marked.parse(source)}</div>
+    <div class="prose {here.length ? `peered q-peer-c${here[0].color}` : ''}" ondblclick={() => ctl.select(name, "edit")}>
+      {#if here.length}<span class="peers"><Avatars users={here} label="is editing" /></span>{/if}
+      {@html marked.parse(source)}
+    </div>
   {/if}
 
   {#if run && !isMd && (run.outputs.length || run.progress)}
@@ -403,6 +412,26 @@
   }
   .editing .code {
     border-color: var(--ring);
+  }
+  /* someone else is in this cell: their color around it, their badge on its corner */
+  .code.peered,
+  .prose.peered {
+    position: relative;
+    overflow: visible;
+    border-color: var(--peer);
+    box-shadow: 0 0 0 1px var(--peer);
+  }
+  .prose.peered {
+    border: 1px solid var(--peer);
+    border-radius: 6px;
+  }
+  /* beside the box's top-left corner, in the gutter: not over the cell's name or its code */
+  .peers {
+    position: absolute;
+    top: 0.3125rem;
+    right: calc(100% + 0.375rem);
+    z-index: 3;
+    line-height: 0;
   }
   .error .code {
     border-color: color-mix(in srgb, var(--critical) 40%, var(--hair));

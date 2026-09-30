@@ -21,6 +21,7 @@ const RAW: Record<string, string> = {
   "/api/workspaces/:ws/notebooks/:nb/cells/:cell/export": "signed in, notebook.run",
   "/mcp": "a client token; each tool checks its owner and the AI level",
   "/ws/:ws/:nb": "signed in, notebook.view; each message checked (SOCKET_NEEDS)",
+  "/ws/:ws/:nb/collab": "signed in, notebook.view and readCode; edits only with notebook.edit, rechecked (collab.ts)",
   "/ws/:ws/:nb/report": "signed in, report.view, published; each message checked (REPORT_SOCKET_NEEDS)",
 };
 

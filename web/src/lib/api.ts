@@ -80,6 +80,7 @@ export type Action =
   | "notebook.view"
   | "notebook.readCode"
   | "notebook.run"
+  | "notebook.shell"
   | "notebook.edit"
   | "notebook.delete"
   | "notebook.share"

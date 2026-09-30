@@ -102,6 +102,7 @@
       { group: "view", label: "Source Control", keys: "ctrl+shift+g", icon: "source-control", run: () => (wb.view = "scm") },
       { group: "view", label: "Data: Tables, Files, Connections", icon: "database", run: () => (wb.view = "data") },
       { group: "view", label: "Problems", icon: "warning", run: () => wb.togglePanel("problems") },
+      { group: "view", label: "Terminal: A Shell in Your Kernel's Sandbox", keys: "ctrl+`", icon: "terminal", needs: "notebook.shell" as const, run: () => wb.togglePanel("terminal") },
       { group: "view", label: "Split Editor Right", keys: "ctrl+\\", icon: "split-horizontal", run: () => wb.split("right") },
       { group: "view", label: "Split Editor Down", keys: "ctrl+alt+\\", icon: "split-vertical", run: () => wb.split("down") },
       { group: "view", label: "Split Editor Left", icon: "split-horizontal", run: () => wb.split("left") },

@@ -142,6 +142,25 @@ reaches the other, and each runs with what they may use. A kernel unused for
 `QUERIER_MAX_KERNELS_PER_USER` (default 3) cap how many run, and a run over a cap
 says which.
 
+**Editing together**: everyone with a notebook open edits the same code, live.
+Edits made at once in the same cell merge character by character (a Yjs document
+per notebook, `server/collab.ts`); the server writes each cell to its file a moment
+after it changes, and takes in what changed the files otherwise (a pull, an AI
+client, a new cell). Who else is here shows in the title bar; a cell someone is in
+has their color around it and their badge beside it, and their cursor and
+selection show in its code, named while they move. Undo takes back only your own
+edits. Viewers see it all as it is typed and can't change it. Code and presence
+are shared; results stay each person's own (their kernel).
+
+**Terminal** (the panel's Terminal tab, Ctrl+`): a shell in your own kernel's
+microVM, with its connections, the notebook as its folder and the sandbox's
+network rules. The notebook's files are read-only there, and what you write or
+install is gone when the kernel restarts: lasting packages belong in the
+notebook's Environment settings. It needs `notebook.shell`, which comes with
+running (Contributor and up, a Run share and up) and which a policy can take away
+on its own; opening one is audited. A kernel that isn't a microVM (the local
+runner) has no terminal.
+
 **Connections** give kernels their credentials, so no cell holds a password. A
 connection is a named set of environment variables: one named `sr` gives
 `SR_USER`/`SR_PASS`, which basalt's `CREATE CONNECTION sr` reads by itself;
@@ -244,7 +263,7 @@ Every page, API call, kernel socket and AI token needs a signed-in person.
   - **Opting out, for now:** `QUERIER_ALLOW_HTTP=1` in `.env` takes them over plain HTTP from anywhere. Anyone on the network in between can read passwords and session cookies, so only on a network you trust, until a certificate is in place. The server warns on every start.
 - **Audit:** every sign-in, denial and change is logged in `<config>/querier.db`.
 - **Access** is decided by one policy engine ([Cedar](https://www.cedarpolicy.com)) on every request, socket message and AI tool call:
-  - **Roles and shares, as in Microsoft Fabric**, given in Manage access to a person, a directory group, everyone, or everyone whose attributes match a condition (`principal.getTag("department").contains("Finance")`): a workspace's Viewer, Contributor, Member or Admin; a notebook's Read, Run, Edit or Reshare; a connection's User or Owner.
+  - **Roles and shares, as in Microsoft Fabric**, given in Manage access to a person, a directory group, everyone, or everyone whose attributes match a condition (`principal.getTag("department").contains("Finance")`): a workspace's Viewer, Contributor, Member or Admin; a notebook's Read, Run, Edit or Reshare; a connection's User or Owner. Running (`notebook.run`) comes with a terminal (`notebook.shell`): `forbid (principal, action == Action::"notebook.shell", resource);` in a policy file takes terminals away from everyone.
   - **Policy files** (Administration → Policies, or `<config>/policies/*.cedar`, git-able): rules roles can't say, over people's directory attributes and workspaces' and notebooks' tags. Checked as they are typed; a file with errors isn't saved, a set that doesn't load keeps the last valid one in force, and a policy that errors counts as a denial. A `forbid` wins over any `permit`.
   - **Administration** (the sysadmin, or whoever a policy gives `admin.manage`; the gear menu): the policy files; **explain a decision** (may this person do this to that, and which policies decided it); **people** (their groups and attributes as policies see them, and what they may do where); and the **audit log** (sign-ins, denials, grants, policy and connection changes), filtered and paged.
   - People who sign in see nothing until something gives them access. **Who may sign in at all** can be narrowed (Administration → Sign-in → Who may sign in, or any policy forbidding `signIn`): by group, directory attribute or provider. Someone who stops matching is signed out at their next request; the system administrator always may.
