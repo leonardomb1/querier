@@ -15,6 +15,7 @@
     onscope,
     toc,
     reveal = null,
+    asked = 0,
     children,
   }: {
     scopes: { id: string; label: string; hint?: string }[];
@@ -24,6 +25,8 @@
     toc: { id: string; label: string }[];
     /** a group to bring into view (set by whoever opened the editor) */
     reveal?: string | null;
+    /** changes with each request to reveal, so the same group asked for again is scrolled to again */
+    asked?: number;
     children: Snippet;
   } = $props();
 
@@ -58,6 +61,7 @@
   // another scope: from its top, unless a group of it was asked for
   $effect(() => {
     void scope;
+    void asked;
     const to = reveal;
     tick().then(() => {
       if (to) go(to, false);

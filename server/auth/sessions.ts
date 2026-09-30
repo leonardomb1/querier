@@ -52,6 +52,13 @@ export class Sessions {
     return { idHash: row.id_hash, principal: JSON.parse(row.principal), provider: row.provider, refresh: row.refresh ?? undefined, created: row.created, lastSeen: now, refreshed: row.refreshed, expires: row.expires };
   }
 
+  /** Every live session (not expired, not idle too long), most recently seen first. */
+  live(now = Date.now()): Session[] {
+    const idleMs = this.cfg().idleMinutes * 60_000;
+    const rows = this.db.query("SELECT * FROM sessions WHERE expires > ? AND last_seen > ? ORDER BY last_seen DESC").all(now, now - idleMs) as any[];
+    return rows.map((row) => ({ idHash: row.id_hash, principal: JSON.parse(row.principal), provider: row.provider, refresh: row.refresh ?? undefined, created: row.created, lastSeen: row.last_seen, refreshed: row.refreshed, expires: row.expires }));
+  }
+
   dueForRefresh(s: Session, now = Date.now()) {
     return now - s.refreshed > this.cfg().refreshMinutes * 60_000;
   }

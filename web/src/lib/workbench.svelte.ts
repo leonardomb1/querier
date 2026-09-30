@@ -98,6 +98,8 @@ export class Workbench {
   /** the settings editor's scope, and a group of it to bring into view */
   settingsScope = $state<"user" | "workspace" | "notebook">("notebook");
   settingsReveal = $state<string | null>(null);
+  /** counts the requests to reveal a group: asked again for the same one, it is scrolled to again */
+  settingsAsked = $state(0);
   /** a tab being dragged: from a group (and its place there), or from the side bar */
   drag = $state<{ tab: Tab; from: number | null; index: number } | null>(null);
 
@@ -363,6 +365,7 @@ export class Workbench {
   openSettings(scope: "user" | "workspace" | "notebook" = "notebook", section: string | null = null) {
     this.settingsScope = scope;
     this.settingsReveal = section;
+    this.settingsAsked++;
     this.open({ kind: "settings" });
   }
 }

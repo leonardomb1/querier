@@ -8,7 +8,7 @@ const enc = encodeURIComponent;
 
 export const homeHref = () => "#/";
 /** The admin console's sections. */
-export const ADMIN_SECTIONS = ["policies", "explain", "people", "audit", "signin"] as const;
+export const ADMIN_SECTIONS = ["policies", "explain", "people", "audit", "signin", "server"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 export const adminHref = (section: AdminSection = "policies", q?: Record<string, string>) =>
   `#/admin/${section}${q && Object.keys(q).length ? `?${new URLSearchParams(q)}` : ""}`;

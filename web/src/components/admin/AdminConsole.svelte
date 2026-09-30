@@ -5,6 +5,7 @@
   import ExplainView from "./ExplainView.svelte";
   import PeopleView from "./PeopleView.svelte";
   import PoliciesView from "./PoliciesView.svelte";
+  import ServerView from "./ServerView.svelte";
   import SignInView from "./SignInView.svelte";
 
   // Administration, as an editor at home: who may do what (the policy files),
@@ -19,6 +20,7 @@
     { id: "people", label: "People", icon: "person", what: "Who has signed in, as policies see them" },
     { id: "audit", label: "Audit log", icon: "history", what: "Sign-ins, denials, changes" },
     { id: "signin", label: "Sign-in", icon: "key", what: "Directories and identity providers, sessions" },
+    { id: "server", label: "Server", icon: "server", what: "The machine, running kernels, who is signed in" },
   ];
 </script>
 
@@ -41,6 +43,8 @@
         <PeopleView {query} />
       {:else if section === "signin"}
         <SignInView />
+      {:else if section === "server"}
+        <ServerView />
       {:else}
         <AuditView {query} />
       {/if}

@@ -10,6 +10,7 @@
 
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { compile, compileModule } from "svelte/compiler";
 
 const WEB = resolve(import.meta.dir, "../web/src");
@@ -37,6 +38,8 @@ async function runtimeVersion(): Promise<string> {
       }
     };
     await walk(WEB);
+    // and how it is bundled (this file): a fix here rebuilds what was built before it
+    h.update(await Bun.file(import.meta.path).text());
     return h.digest("hex").slice(0, 12);
   })();
   return runtimeHash;
@@ -75,11 +78,27 @@ function forbidden(js: string, names: string[] = []): string | null {
   return null;
 }
 
+/** Where "svelte" or one of its subpaths is for a browser: the server's own copy (one runtime for the
+ *  template and its packages), its browser build. Its exports send "browser" to index-client.js and
+ *  everything else to index-server.js, which is what Bun.resolveSync picks (the server's conditions). */
+export function browserSvelte(spec: string): string {
+  const main = Bun.resolveSync("svelte", RUNTIME);
+  const dir = main.slice(0, main.lastIndexOf("/src/"));
+  const exports = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).exports as Record<string, unknown>;
+  let target: unknown = exports[spec === "svelte" ? "." : `.${spec.slice("svelte".length)}`];
+  while (target && typeof target === "object") {
+    const t = target as Record<string, unknown>;
+    target = t.browser ?? t.import ?? t.default;
+  }
+  if (typeof target !== "string") throw new Error(`svelte has no "${spec}"`);
+  return join(dir, target);
+}
+
 /** The environment's packages, resolved from their builds; svelte always the server's own (one runtime). */
 const packagesPlugin = (p: TemplatePackages) => ({
   name: "packages",
   setup(b: any) {
-    b.onResolve({ filter: /^svelte(\/.*)?$/ }, ({ path }: { path: string }) => ({ path: Bun.resolveSync(path, RUNTIME) }));
+    b.onResolve({ filter: /^svelte(\/.*)?$/ }, ({ path }: { path: string }) => ({ path: browserSvelte(path) }));
     if (!p.names.length) return;
     const names = new RegExp(`^(${p.names.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})(/.*)?$`);
     b.onResolve({ filter: names }, ({ path }: { path: string }) => {

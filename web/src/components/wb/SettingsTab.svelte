@@ -35,7 +35,7 @@
   }
 </script>
 
-<SettingsEditor {scopes} {scope} {onscope} {toc} reveal={wb.settingsReveal}>
+<SettingsEditor {scopes} {scope} {onscope} {toc} reveal={wb.settingsReveal} asked={wb.settingsAsked}>
   {#if scope === "user"}
     <UserScope />
   {:else if scope === "workspace"}

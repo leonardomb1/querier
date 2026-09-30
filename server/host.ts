@@ -82,6 +82,8 @@ export class Host {
   private waiting = new Map<number, () => void>();
   /** The kernel's CPU and memory, scraped every 2 s while it runs; 15 minutes of it kept. */
   readonly monitor = new Monitor();
+  /** when its kernel started (epoch ms), while one runs */
+  private startedAt?: number;
   private scraping?: ReturnType<typeof setInterval>;
   /** Last asked to do something (run, complete, inspect…) or looked at: for the idle stop. */
   lastUsed = Date.now();
@@ -178,6 +180,28 @@ export class Host {
     const m = Math.round(idleMs / 60_000);
     const unused = m >= 1 ? `${m} minute${m === 1 ? "" : "s"}` : `${Math.round(idleMs / 1000)} seconds`;
     await this.stop(`The kernel stopped after ${unused} unused. Run a cell to start it again.`);
+  }
+
+  /** An administrator stopped it (Administration → Server): the tabs are told. */
+  stopByAdmin() {
+    return this.stop("An administrator stopped the kernel. Run a cell to start it again.");
+  }
+
+  /** What Administration → Server shows of it: whose, what kind, how busy, and what it uses. */
+  summary() {
+    const owner = this.opts.owner;
+    return {
+      notebook: this.nb,
+      kind: this.kind,
+      owner: owner ? { id: owner.id, name: owner.name ?? owner.username } : null,
+      state: this.opening && !this.session ? "starting" : this.busy ? "running" : "idle",
+      startedAt: this.startedAt ?? null,
+      lastUsed: this.lastUsed,
+      tabs: this.clients.size,
+      terminals: [...this.terminals.values()].reduce((n, m) => n + m.size, 0),
+      info: this.session?.info ?? {},
+      point: this.monitor.points.at(-1) ?? null,
+    };
   }
 
   /** Stop the kernel, telling its tabs why: what it held is gone, and the next run starts a new one. */
@@ -386,6 +410,7 @@ export class Host {
         throw e;
       }
       this.session = s;
+      this.startedAt = Date.now();
       s.closed.then(() => {
         release();
         if (this.session === s) this.stopScraping();

@@ -34,7 +34,7 @@
     query = {},
   }: { index: WorkspaceIndex; ws: string | null; tab: "overview" | "settings" | "admin"; section?: AdminSection; query?: Record<string, string> } = $props();
   const mayAdmin = $derived(session.can("admin.manage"));
-  const SECTION_LABEL: Record<AdminSection, string> = { policies: "Policies", explain: "Explain a decision", people: "People", audit: "Audit log", signin: "Sign-in" };
+  const SECTION_LABEL: Record<AdminSection, string> = { policies: "Policies", explain: "Explain a decision", people: "People", audit: "Audit log", signin: "Sign-in", server: "Server" };
 
   // what the router loaded; changes here refetch it without a navigation
   let spaces = $derived(index.workspaces);

@@ -161,3 +161,38 @@ test("each kernel runs with its owner's own credentials; changing them marks onl
   ana.close();
   bob.close();
 }, 60_000);
+
+test("administration: every running kernel and who is signed in; an admin stops a kernel and signs someone out", async () => {
+  const as = (who: string, method: string, path: string) =>
+    fetch(`http://localhost:${PORT}/api${path}`, { method, headers: { cookie: cookies[who] } }).then(async (r) => ({ status: r.status, body: (await r.json().catch(() => ({}))) as any }));
+  const ana = await Tab.open("ana", "w/one");
+  await ana.until((f) => f.type === "replayed");
+  // (the replay may hold an earlier run's state: this run's own kernel is waited for)
+  ana.frames.length = 0;
+  ana.send({ op: "run", cells: ["q"], params: {} });
+  await ana.until((f) => f.type === "session" && f.state === "ready");
+  await ana.until((f) => f.type === "state" && f.cell === "q" && f.state === "ok");
+
+  expect((await as("ana", "GET", "/admin/server")).status).toBe(403);
+  const s = (await as("root", "GET", "/admin/server")).body;
+  expect(s.machine.cpus).toBeGreaterThan(0);
+  expect(s.limits.running).toBeGreaterThanOrEqual(1);
+  const k = s.kernels.find((x: any) => x.notebook === "w/one" && x.owner?.id === "corp:ana");
+  expect(k).toMatchObject({ kind: "live", tabs: 1 });
+  expect(s.sessions.find((x: any) => x.yours)?.who.sysadmin).toBe(true);
+  const hers = s.sessions.find((x: any) => x.who.id === "corp:ana");
+  expect(hers.sockets).toBeGreaterThanOrEqual(1);
+
+  // her kernel stopped: her tab is told who did it
+  expect((await as("ana", "DELETE", `/admin/server/kernels/${k.id}`)).status).toBe(403);
+  expect((await as("root", "DELETE", `/admin/server/kernels/${k.id}`)).status).toBe(200);
+  await ana.until((f) => f.type === "session" && f.stopped?.includes("administrator"));
+  expect((await as("root", "GET", "/admin/server")).body.kernels.some((x: any) => x.id === k.id)).toBe(false);
+
+  // signed out: her session is gone at once, and so is her tab's connection
+  expect((await as("root", "DELETE", `/admin/sessions/${hers.id}`)).status).toBe(200);
+  expect((await as("ana", "GET", "/me")).status).toBe(401);
+  expect((await as("root", "GET", "/admin/server")).body.sessions.some((x: any) => x.who.id === "corp:ana")).toBe(false);
+  expect((await as("root", "GET", "/admin/audit?action=session.revoke")).body.entries.length).toBe(1);
+  ana.close();
+}, 60_000);

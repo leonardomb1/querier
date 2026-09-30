@@ -5,6 +5,7 @@
 import { join, resolve } from "node:path";
 import { Host, type CellOutput, type Client } from "./host";
 import { Rooms } from "./collab";
+import * as os from "node:os";
 import { encodeFrame } from "./runner/protocol";
 import { FirecrackerRunner } from "./runner/firecracker";
 import { LocalRunner } from "./runner/local";
@@ -66,6 +67,27 @@ auth.admit = (p) => authz.can(p, "signIn", authz.tenant(), true);
 if (allowInsecureLogin && !publicUrl.startsWith("https://"))
   console.warn("QUERIER_ALLOW_HTTP=1: passwords and session cookies are accepted over plain HTTP, readable by anyone on the network between browsers and Querier. Serve it over HTTPS (a reverse proxy ending TLS, QUERIER_PUBLIC_URL) and remove it.");
 const dist = resolve(import.meta.dir, "../web/dist");
+/** The machine Querier runs on (the host's, from inside a container): CPUs and how busy they are
+ *  since the last look, load, memory, and how long it and Querier have been up. */
+let cpuSample: { idle: number; total: number } | null = null;
+function machine() {
+  const cpus = os.cpus();
+  const idle = cpus.reduce((n, c) => n + c.times.idle, 0);
+  const total = cpus.reduce((n, c) => n + c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq, 0);
+  const cpu = cpuSample && total > cpuSample.total ? 1 - (idle - cpuSample.idle) / (total - cpuSample.total) : null;
+  cpuSample = { idle, total };
+  return {
+    cpus: cpus.length,
+    cpu,
+    load: os.loadavg(),
+    memTotal: os.totalmem(),
+    memFree: os.freemem(),
+    uptime: os.uptime(),
+    querierUptime: process.uptime(),
+    querierRss: process.memoryUsage().rss,
+  };
+}
+
 /** For the sysadmin's own session: whether its password is Querier's to change, and still the generated one. */
 const sysadminAccount = (p: Principal) =>
   p.sysadmin ? { password: { changeable: auth.sysadmin.source === "file", mustChange: auth.sysadmin.mustChangePassword } } : {};
@@ -1443,6 +1465,44 @@ const server = Bun.serve<Client["data"], any>({
         const g = authz.grants.get(r.params.grant);
         if (!g || g.scope !== "connection" || g.target !== c.id) throw new NotFound("There is no such grant.");
         removeGrant(r.session, g);
+      }),
+    },
+    // -- the server (admin.manage): the machine, every running kernel, everyone signed in
+    "/api/admin/server": {
+      GET: api({ on: "tenant", action: "admin.manage" }, async (r) => ({
+        machine: machine(),
+        limits: { ...kernels.limits, running: kernels.count() },
+        runner: process.env.QUERIER_RUNNER === "firecracker" ? "firecracker" : "local",
+        kernels: [...hosts].filter(([, h]) => h.running).map(([key, h]) => ({ id: Buffer.from(key).toString("base64url"), ...h.summary() })),
+        sessions: auth.sessions.live().map((s) => ({
+          id: s.idHash,
+          who: { id: s.principal.id, name: s.principal.name ?? s.principal.username, username: s.principal.username, sysadmin: !!s.principal.sysadmin },
+          provider: s.provider,
+          created: s.created,
+          lastSeen: s.lastSeen,
+          expires: s.expires,
+          sockets: sockets.get(s.idHash)?.size ?? 0,
+          yours: s.idHash === r.session.idHash,
+        })),
+      })),
+    },
+    // stop someone's kernel: its tabs are told, and their next run starts a new one
+    "/api/admin/server/kernels/:id": {
+      DELETE: api({ on: "tenant", action: "admin.manage" }, async (r) => {
+        const key = Buffer.from(r.params.id, "base64url").toString();
+        const h = hosts.get(key);
+        if (!h?.running) throw new NotFound("That kernel isn't running any more.");
+        await h.stopByAdmin();
+        auth.audit.log({ actor: r.session.principal.id, action: "kernel.stop", resource: `Notebook:${h.nb}`, decision: "ok", detail: { owner: h.owner?.id, kind: h.kind } });
+      }),
+    },
+    // sign someone out: the session ends at once, and its open sockets close
+    "/api/admin/sessions/:id": {
+      DELETE: api({ on: "tenant", action: "admin.manage" }, async (r) => {
+        const s = auth.sessions.live().find((x) => x.idHash === r.params.id);
+        if (!s) throw new NotFound("That session has already ended.");
+        auth.end(s, `signed out by ${r.session.principal.id}`);
+        auth.audit.log({ actor: r.session.principal.id, action: "session.revoke", resource: `User:${s.principal.id}`, decision: "ok" });
       }),
     },
     // -- sign-in: the identity providers (auth.json) and session lifetimes (admin.manage)

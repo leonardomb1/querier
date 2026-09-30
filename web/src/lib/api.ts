@@ -363,6 +363,36 @@ export interface AuditEntry {
   detail?: Record<string, unknown>;
 }
 /** An identity provider's settings (auth.json), as the console gets them: a stored secret never comes back. */
+/** Administration → Server: the machine, the running kernels, the live sessions. */
+export interface ServerStatus {
+  machine: { cpus: number; cpu: number | null; load: number[]; memTotal: number; memFree: number; uptime: number; querierUptime: number; querierRss: number };
+  limits: { total: number; perUser: number; idle: number; running: number };
+  runner: "firecracker" | "local";
+  kernels: {
+    id: string;
+    notebook: string;
+    kind: "live" | "report" | "schedule";
+    owner: { id: string; name: string } | null;
+    state: "starting" | "running" | "idle";
+    startedAt: number | null;
+    lastUsed: number;
+    tabs: number;
+    terminals: number;
+    info: Record<string, string>;
+    point: { t: number; cpu: number | null; mem: number; memTotal: number } | null;
+  }[];
+  sessions: {
+    id: string;
+    who: { id: string; name: string; username: string; sysadmin: boolean };
+    provider: string;
+    created: number;
+    lastSeen: number;
+    expires: number;
+    sockets: number;
+    yours: boolean;
+  }[];
+}
+
 /** A certificate as the server read it: to compare with what IT says it is. */
 export interface CertificateInfo {
   subject: string;
@@ -604,6 +634,10 @@ export const api = {
       certificate: (given: { pem: string } | { der: string }) => call<{ pem: string; certs: CertificateInfo[] }>("POST", "/admin/auth/certificate", given),
     },
     person: (id: string) => call<PersonDetail>("GET", `/admin/people/${encodeURIComponent(id)}`),
+    /** the machine, every running kernel, everyone signed in */
+    server: () => call<ServerStatus>("GET", "/admin/server"),
+    stopKernel: (id: string) => call("DELETE", `/admin/server/kernels/${encodeURIComponent(id)}`),
+    revokeSession: (id: string) => call("DELETE", `/admin/sessions/${encodeURIComponent(id)}`),
     audit: (q: { before?: number; limit?: number; actor?: string; action?: string; decision?: string; resource?: string }) =>
       call<{ entries: AuditEntry[]; names: Record<string, string> }>(
         "GET",

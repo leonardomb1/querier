@@ -38,3 +38,13 @@ test("a template may import only svelte and querier; nothing runs at bundle time
   const bad = await buildTemplate(`<p>{oops</p>`);
   expect(bad.error?.line).toBe(1);
 });
+
+test("a template gets svelte's browser build, packages or not (its server build can't mount)", async () => {
+  const src = "<script>let { cells } = $props();</script><h1>{Object.keys(cells).length}</h1>";
+  for (const packages of [undefined, { names: [], dirs: [], key: "none" }]) {
+    const built = await buildTemplate(src, packages);
+    expect(built.error).toBeUndefined();
+    // the server build's mount throws this; the browser build has no such error
+    expect(built.js).not.toContain("lifecycle_function_unavailable");
+  }
+});
