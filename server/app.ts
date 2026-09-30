@@ -63,6 +63,9 @@ auth.admit = (p) => authz.can(p, "signIn", authz.tenant(), true);
   if (moved.length) console.log(`moved ${moved.length} notebook${moved.length === 1 ? "" : "s"} into the "${DEFAULT_WORKSPACE}" workspace`);
 }
 const dist = resolve(import.meta.dir, "../web/dist");
+/** For the sysadmin's own session: whether its password is Querier's to change, and still the generated one. */
+const sysadminAccount = (p: Principal) =>
+  p.sysadmin ? { password: { changeable: auth.sysadmin.source === "file", mustChange: auth.sysadmin.mustChangePassword } } : {};
 
 // Each person has their own kernel of a notebook (as in Microsoft Fabric): a Host
 // per (notebook, person), so what a kernel holds and prints is its owner's. The
@@ -779,7 +782,22 @@ const server = Bun.serve<Client["data"], any>({
       GET: async (req) => {
         const s = await auth.authenticate(req);
         if (!s) return Response.json({ error: "Not signed in.", login: true }, { status: 401 });
-        return Response.json({ me: publicPrincipal(s.principal), permissions: authz.allowed(s.principal, authz.tenant()), sessionExpires: s.expires });
+        return Response.json({ me: publicPrincipal(s.principal), permissions: authz.allowed(s.principal, authz.tenant()), sessionExpires: s.expires, ...sysadminAccount(s.principal) });
+      },
+    },
+    // the sysadmin's own password (Querier's account; one from .env changes there)
+    "/api/me/password": {
+      POST: async (req, srv) => {
+        if (foreign(req)) return Response.json({ error: "Change it from Querier's own page." }, { status: 403 });
+        const s = await auth.authenticate(req);
+        if (!s) return Response.json({ error: "Not signed in.", login: true }, { status: 401 });
+        const b = await req.json().catch(() => ({}));
+        try {
+          await auth.changeSysadminPassword(s, String(b.current ?? ""), String(b.password ?? ""), clientIp(req, srv));
+          return Response.json(sysadminAccount(s.principal));
+        } catch (e: any) {
+          return Response.json({ error: e.message }, { status: e instanceof LoginFailed ? 403 : 400 });
+        }
       },
     },
     // workspaces: folders of notebooks, with settings their notebooks share

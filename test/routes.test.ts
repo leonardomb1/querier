@@ -16,6 +16,7 @@ const RAW: Record<string, string> = {
   "/api/auth/oidc/:id/callback": "public: signing in (state, nonce, browser binding)",
   "/api/auth/logout": "its own session",
   "/api/me": "its own session",
+  "/api/me/password": "its own session, the sysadmin's (the current password, throttled)",
   "/api/workspaces/:ws/notebooks/:nb/template.js": "a signed token, given with notebook.readCode",
   "/api/workspaces/:ws/notebooks/:nb/cells/:cell/export": "signed in, notebook.run",
   "/mcp": "a client token; each tool checks its owner and the AI level",

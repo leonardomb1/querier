@@ -7,6 +7,7 @@
   import ReportPage from "./components/ReportPage.svelte";
   import Spinner from "./components/Spinner.svelte";
   import Dialogs from "./components/ui/Dialogs.svelte";
+  import PasswordDialog from "./components/auth/PasswordDialog.svelte";
   import { Router } from "./lib/router.svelte";
   import { zoom } from "./lib/zoom.svelte";
 
@@ -73,6 +74,11 @@
   <div class="loading boot"><Spinner /></div>
 {:else if router.slow}
   <div class="progress" role="progressbar" aria-label="Loading"></div>
+{/if}
+
+<!-- the sysadmin's password: its own after the generated one, over any page -->
+{#if session.changingPassword && session.me && route?.page !== "login"}
+  <PasswordDialog onclose={() => (session.changingPassword = false)} />
 {/if}
 
 <!-- alerts, confirmations and questions (lib/dialog.svelte.ts), over any page -->

@@ -10,7 +10,7 @@ import { LoginLimiter } from "../server/auth/limits";
 import { isEntraOverage } from "../server/auth/oidc";
 import { mapAttributes, strings } from "../server/auth/principal";
 import { cookieOf, Sessions } from "../server/auth/sessions";
-import { Sysadmin } from "../server/auth/sysadmin";
+import { generatePassword, Sysadmin } from "../server/auth/sysadmin";
 import { Signer } from "../server/auth/tokens";
 
 const req = (cookie = "", url = "http://localhost/api/me") => new Request(url, { headers: { cookie } });
@@ -51,7 +51,7 @@ test("failed logins wait, longer each time; a success clears it", () => {
 });
 
 test("the sysadmin: from the environment, required, checked by hash", async () => {
-  expect(() => new Sysadmin({})).toThrow("No sysadmin");
+  expect(() => new Sysadmin({})).toThrow("No sysadmin in the environment");
   const hash = await Bun.password.hash("correct horse");
   const s = new Sysadmin({ QUERIER_ADMIN_USER: "root", QUERIER_ADMIN_PASSWORD_HASH: hash });
   expect(await s.verify("root", "correct horse")).toBe(true);
@@ -62,6 +62,64 @@ test("the sysadmin: from the environment, required, checked by hash", async () =
   const b64 = new Sysadmin({ QUERIER_ADMIN_USER: "root", QUERIER_ADMIN_PASSWORD_HASH: `b64:${Buffer.from(hash).toString("base64")}` });
   expect(await b64.verify("root", "correct horse")).toBe(true);
   expect(() => new Sysadmin({ QUERIER_ADMIN_USER: "root", QUERIER_ADMIN_PASSWORD_HASH: "=19=65536" })).toThrow("isn't a password hash");
+});
+
+test("the sysadmin, Querier's own: generated on the first start, printed until changed, then its own", async () => {
+  const file = join(await mkdtemp(join(tmpdir(), "sysadmin-")), "config", "sysadmin.json");
+  const printed: string[] = [];
+  const log = console.log;
+  console.log = (m: string) => printed.push(m);
+  let s: Sysadmin;
+  try {
+    s = await Sysadmin.open({}, file);
+  } finally {
+    console.log = log;
+  }
+  expect(s.source).toBe("file");
+  expect(s.username).toBe("admin");
+  expect(s.mustChangePassword).toBe(true);
+  expect((await Bun.file(file).stat()).mode & 0o777).toBe(0o600);
+  const password = printed.join("\n").match(/password: (\S+)/)![1];
+  expect(password).toMatch(/^[a-zA-Z2-9]{5}(-[a-zA-Z2-9]{5}){3}$/);
+  expect(await s.verify("admin", password)).toBe(true);
+
+  // the next start keeps it (and prints it again: still the generated one)
+  console.log = () => {};
+  const again = await Sysadmin.open({}, file).finally(() => (console.log = log));
+  expect(await again.verify("admin", password)).toBe(true);
+  const before = await again.fingerprint();
+
+  // one's own: long enough, not the generated one; the old stops working, sessions of it end
+  await expect(again.setPassword("short")).rejects.toThrow("at least 12");
+  await expect(again.setPassword(password)).rejects.toThrow("Not the generated password");
+  await again.setPassword("a much better passphrase");
+  expect(again.mustChangePassword).toBe(false);
+  expect(await again.verify("admin", password)).toBe(false);
+  expect(await again.verify("admin", "a much better passphrase")).toBe(true);
+  expect(await again.fingerprint()).not.toBe(before);
+  const stored = await Bun.file(file).json();
+  expect(stored.initialPassword).toBeUndefined();
+  expect(JSON.stringify(stored)).not.toContain("a much better passphrase");
+
+  // and it's quiet after: nothing printed; QUERIER_ADMIN_USER renames it
+  const quiet: string[] = [];
+  console.log = (m: string) => quiet.push(m);
+  const renamed = await Sysadmin.open({ QUERIER_ADMIN_USER: "root" }, file).finally(() => (console.log = log));
+  expect(quiet).toEqual([]);
+  expect(await renamed.verify("root", "a much better passphrase")).toBe(true);
+
+  // .env's account wins, and is changed only there
+  const env = await Sysadmin.open({ QUERIER_ADMIN_USER: "ops", QUERIER_ADMIN_PASSWORD_HASH: await Bun.password.hash("from env") }, file);
+  expect(env.source).toBe("env");
+  expect(await env.verify("ops", "from env")).toBe(true);
+  await expect(env.setPassword("a much better passphrase")).rejects.toThrow("set in the environment");
+  await expect(Sysadmin.open({ QUERIER_ADMIN_PASSWORD_HASH: "x" }, file)).rejects.toThrow("without QUERIER_ADMIN_USER");
+});
+
+test("generated passwords: unambiguous characters, all different", () => {
+  const seen = new Set(Array.from({ length: 200 }, generatePassword));
+  expect(seen.size).toBe(200);
+  for (const p of seen) expect(p).not.toMatch(/[01ilIoO]/);
 });
 
 test("sessions: the cookie's id, hashed; idle and absolute limits; refresh due", () => {

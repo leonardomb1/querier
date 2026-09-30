@@ -201,6 +201,9 @@ export const loginHref = (next = "#/", error?: string) =>
   `#/login?next=${encodeURIComponent(next || "#/")}${error ? `&error=${encodeURIComponent(error)}` : ""}`;
 
 /** Someone signed in: who, from where, what they carry. */
+/** The sysadmin's password: Querier's to change (not .env's), and still the generated one. */
+export type SysadminPassword = { changeable: boolean; mustChange: boolean };
+
 export interface Me {
   id: string;
   provider: string;
@@ -472,7 +475,9 @@ export const api = {
     login: (provider: string, username: string, password: string) => call<{ me: Me }>("POST", "/auth/login", { provider, username, password }),
     logout: () => call("POST", "/auth/logout", {}),
     /** who is signed in, and what they may do outside any workspace */
-    me: () => call<{ me: Me; permissions: Action[]; sessionExpires: number }>("GET", "/me"),
+    me: () => call<{ me: Me; permissions: Action[]; sessionExpires: number; password?: SysadminPassword }>("GET", "/me"),
+    /** the sysadmin's new password (Querier's own account): `current` isn't asked while it is the generated one */
+    changePassword: (current: string, password: string) => call<{ password: SysadminPassword }>("POST", "/me/password", { current, password }),
   },
   workspaces: () => call<WorkspaceIndex>("GET", "/workspaces"),
   create: (ws: string, name: string, title?: string) => call<{ id: string }>("POST", `${wsPath(ws)}/notebooks`, { name, title }),

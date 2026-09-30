@@ -59,7 +59,7 @@ export class Auth {
   }
 
   static async open(o: { db?: Database; config?: AuthConfig; sysadmin?: Sysadmin; signer?: Signer } = {}): Promise<Auth> {
-    return new Auth(o.db ?? openDb(), o.config ?? (await loadAuthConfig()), o.sysadmin ?? new Sysadmin(), o.signer ?? (await Signer.open()));
+    return new Auth(o.db ?? openDb(), o.config ?? (await loadAuthConfig()), o.sysadmin ?? (await Sysadmin.open()), o.signer ?? (await Signer.open()));
   }
 
   /** New provider settings (the admin console, a reload): providers rebuilt. */
@@ -140,6 +140,24 @@ export class Auth {
     }
     this.limiter.succeeded(key);
     return { principal, cookie: this.begin(principal, undefined, ip) };
+  }
+
+  /** The sysadmin's new password (Querier's own account, not .env's). The current one first, unless it is
+   *  still the generated one: signing in just proved it. This session goes on; the sysadmin's others end. */
+  async changeSysadminPassword(s: Session, current: string, next: string, ip: string): Promise<void> {
+    if (!s.principal.sysadmin) throw new LoginFailed("Only the system administrator's password is Querier's to change: others are the directory's.");
+    const key = `${ip}\u0000password\u0000${s.principal.id}`;
+    const wait = this.limiter.wait(key);
+    if (wait) throw new LoginFailed(`Too many failed attempts: try again in ${Math.ceil(wait / 60_000)} minute${wait > 60_000 ? "s" : ""}.`);
+    if (!this.sysadmin.mustChangePassword && !(await this.sysadmin.verify(this.sysadmin.username, current))) {
+      this.limiter.failed(key);
+      this.audit.log({ actor: s.principal.id, action: "password", decision: "fail", detail: { ip } });
+      throw new LoginFailed("That isn't the current password.");
+    }
+    this.limiter.succeeded(key);
+    await this.sysadmin.setPassword(next);
+    this.sessions.update(s, { ...s.principal, ref: await this.sysadmin.fingerprint() }, s.refresh);
+    this.audit.log({ actor: s.principal.id, action: "password", decision: "ok", detail: { ip } });
   }
 
   private begin(principal: Principal, refresh: string | undefined, ip: string): string {

@@ -226,9 +226,10 @@ from a browser page on another origin are refused.
 
 Every page, API call, kernel socket and AI token needs a signed-in person.
 
-- **The sysadmin**, from `.env` (copy `.env.example`): `QUERIER_ADMIN_USER`, plus `QUERIER_ADMIN_PASSWORD_HASH` as printed by `bun server/auth/hash.ts`.
-  - It works even when the directory is down, and Querier refuses to start without it.
-  - `compose.yaml` loads `.env` into the container.
+- **The sysadmin** works even when the directory is down, and no policy applies to it.
+  - **On the first start** Querier makes it (`admin`) and prints its generated password to the log: `docker compose logs querier`. The first sign-in asks for a password of your own; the account menu changes it later.
+  - It is kept hashed in `<config>/sysadmin.json`. **A lost password:** delete that file and restart (`docker compose exec querier rm /data/config/sysadmin.json && docker compose restart`), and a new one is printed.
+  - **Or from `.env`** (copy `.env.example`): `QUERIER_ADMIN_USER` with `QUERIER_ADMIN_PASSWORD_HASH`, as printed by `bun server/auth/hash.ts`. It then wins over the file and is changed only there. `compose.yaml` loads `.env` into the container when there is one.
 - **Directories and single sign-on:** Administration → Sign-in adds and edits them (presets for Active Directory, OpenLDAP, Entra ID, Keycloak and any OpenID Connect provider), orders the sign-in page, and tries the settings before saving: the directory reached and a person looked up by name without their password (their groups and mapped attributes shown), or the issuer's discovery read and the redirect URI to register. Also session lifetimes. It is all kept in `<config>/auth.json` (mode 600; `auth.example.json` has examples), which can be edited by hand too. A secret there may be `"env:NAME"`, read from `.env`; a stored one is never sent back to the page.
   - **LDAP / Active Directory:** `{ "id": "corp", "type": "ldap", "label": "Corporate AD", "url": "ldaps://dc.corp:636", "caFile": "/data/config/ca.pem", "bindDn": "CN=svc-querier,…", "bindPassword": "env:LDAP_BIND_PASSWORD", "baseDn": "DC=corp,DC=local", "groupBaseDn": "DC=corp,DC=local", "attributes": { "department": "department", "title": "title" } }`
     - Querier searches with the service account, then binds as the person.
@@ -258,6 +259,7 @@ Every page, API call, kernel socket and AI token needs a signed-in person.
 
 ```sh
 docker compose up -d             # http://localhost:3000
+docker compose logs querier      # the sysadmin's generated password, on the first start
 ```
 
 It runs the published image, `ghcr.io/leonardomb1/querier`: each release (a tag

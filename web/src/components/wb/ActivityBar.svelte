@@ -35,6 +35,7 @@
         items={[
           { label: `${session.me.name ?? session.me.username}${session.me.email ? ` · ${session.me.email}` : ""}`, disabled: false, run: () => {} },
           "-",
+          ...(session.password?.changeable ? [{ label: "Change Password…", run: () => (session.changingPassword = true) }] : []),
           { label: "Sign Out", run: () => session.signOut() },
         ]}
       />

@@ -4,8 +4,11 @@
 services:
   querier:
     image: ghcr.io/leonardomb1/querier:${QUERIER_VERSION:-latest}
-    # the sysadmin (QUERIER_ADMIN_USER, QUERIER_ADMIN_PASSWORD_HASH) and other settings: see .env.example
-    env_file: .env
+    # settings, when there is a .env (see .env.example); none is needed: the
+    # sysadmin's generated password is printed on the first start (docker compose logs)
+    env_file:
+      - path: .env
+        required: false
     ports: ["3000:3000"]
     volumes:
       - querier-data:/data   # notebooks; config/: connections.json, auth.json, querier.db (sessions, audit), all mode 600
