@@ -157,6 +157,19 @@ gets exactly the connections its owner may use. Values are stored in
 to the browser) and masked in cell output. A literal `password = '…'` in a cell is
 flagged in the editor.
 
+**Environments**: a workspace's settings (and a notebook's, on top) list the
+**Python packages** its kernels get and the **npm packages** its report
+templates may import. Applying one locks it into the folder (`pyproject.toml` +
+`uv.lock`, `package.json` + `bun.lock`, so it travels with git) and builds it on
+the server, never in a sandbox: Python as wheels for the guest (nothing compiled)
+on a read-only disk the microVM mounts, npm with install scripts off. A notebook's
+packages shadow its workspace's, which shadow the image's (polars, altair,
+great_tables, matplotlib). What is in force is what an Admin or Member last
+applied (`environment.manage`): files changed by an edit or a pull show as
+"changed since applied" until someone who may applies them. Builds are cached by
+the lock's hash in `QUERIER_ENVS` (`/data/envs` in the image); a published
+report keeps the environments it was published with.
+
 **Publishing a report** (the report's toolbar → Publish, for who may share the
 notebook) gives it to its viewers, everyone with `report.view` (a workspace's
 Viewers, a Read share, a policy), at `#/w/<ws>/nb/<nb>/view`: the report alone,
