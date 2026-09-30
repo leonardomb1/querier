@@ -27,7 +27,7 @@ import { Kernels } from "./kernels";
 import { reportVersion, Reports, type Published, type RunAs } from "./reports";
 import { Environments, type EnvKind } from "./environments";
 import { hash } from "../shared/hash";
-import { authFile, clientAddress, publicUrl, type ProviderConfig } from "./auth/config";
+import { allowInsecureLogin, authFile, clientAddress, publicUrl, type ProviderConfig } from "./auth/config";
 
 const arg = (flag: string, fallback: string) => {
   const i = process.argv.indexOf(flag);
@@ -62,6 +62,8 @@ auth.admit = (p) => authz.can(p, "signIn", authz.tenant(), true);
   await access.migrate(moved, DEFAULT_WORKSPACE);
   if (moved.length) console.log(`moved ${moved.length} notebook${moved.length === 1 ? "" : "s"} into the "${DEFAULT_WORKSPACE}" workspace`);
 }
+if (allowInsecureLogin && !publicUrl.startsWith("https://"))
+  console.warn("QUERIER_ALLOW_HTTP=1: passwords and session cookies are accepted over plain HTTP, readable by anyone on the network between browsers and Querier. Serve it over HTTPS (a reverse proxy ending TLS, QUERIER_PUBLIC_URL) and remove it.");
 const dist = resolve(import.meta.dir, "../web/dist");
 /** For the sysadmin's own session: whether its password is Querier's to change, and still the generated one. */
 const sysadminAccount = (p: Principal) =>
@@ -726,12 +728,13 @@ const server = Bun.serve<Client["data"], any>({
     },
 
     // -- signing in (no session needed)
-    "/api/auth/providers": { GET: () => Response.json({ providers: auth.providers() }) },
+    // the sign-in choices, and whether passwords are taken over plain HTTP (QUERIER_ALLOW_HTTP)
+    "/api/auth/providers": { GET: () => Response.json({ providers: auth.providers(), httpAllowed: allowInsecureLogin }) },
     "/api/auth/login": {
       POST: async (req, srv) => {
         if (foreign(req)) return Response.json({ error: "Sign in from Querier's own page." }, { status: 403 });
         if (!auth.passwordsAllowed(req))
-          return Response.json({ error: "Passwords are only accepted over HTTPS: set QUERIER_PUBLIC_URL to Querier's https:// address." }, { status: 403 });
+          return Response.json({ error: "Passwords are only accepted over HTTPS: serve Querier over HTTPS and set QUERIER_PUBLIC_URL to its https:// address (or, on a network you trust, QUERIER_ALLOW_HTTP=1 for now)." }, { status: 403 });
         const b = await req.json().catch(() => ({}));
         try {
           const { principal, cookie } = await auth.login(String(b.provider ?? ""), String(b.username ?? ""), String(b.password ?? ""), clientIp(req, srv));

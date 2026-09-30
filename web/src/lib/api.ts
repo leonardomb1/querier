@@ -471,7 +471,7 @@ import type { Block } from "../../../shared/report";
 
 export const api = {
   auth: {
-    providers: () => call<{ providers: SignIn[] }>("GET", "/auth/providers"),
+    providers: () => call<{ providers: SignIn[]; httpAllowed: boolean }>("GET", "/auth/providers"),
     login: (provider: string, username: string, password: string) => call<{ me: Me }>("POST", "/auth/login", { provider, username, password }),
     logout: () => call("POST", "/auth/logout", {}),
     /** who is signed in, and what they may do outside any workspace */

@@ -11,8 +11,9 @@ export const configDir = process.env.QUERIER_CONFIG_DIR ?? join(homedir(), ".con
 
 /** The address people reach Querier at (for OIDC redirects, and whether cookies are Secure). */
 export const publicUrl = (process.env.QUERIER_PUBLIC_URL ?? "").replace(/\/+$/, "");
-/** Password forms over plain HTTP: refused unless this is set (development). */
-export const allowInsecureLogin = process.env.QUERIER_ALLOW_INSECURE_LOGIN === "1";
+/** Passwords over plain HTTP from anywhere: refused unless opted out of HTTPS (QUERIER_ALLOW_HTTP=1;
+ *  QUERIER_ALLOW_INSECURE_LOGIN=1 is its old name), for a trusted network until a certificate is in place. */
+export const allowInsecureLogin = process.env.QUERIER_ALLOW_HTTP === "1" || process.env.QUERIER_ALLOW_INSECURE_LOGIN === "1";
 export const secureCookies = publicUrl.startsWith("https://");
 /** Proxies in front of Querier (their addresses): only their X-Forwarded-For is believed. */
 export const trustedProxies = new Set((process.env.QUERIER_TRUSTED_PROXIES ?? "").split(",").map((s) => s.trim()).filter(Boolean));

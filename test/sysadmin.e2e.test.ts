@@ -12,9 +12,10 @@ let dir: string;
 let server: ReturnType<typeof Bun.spawn>;
 let log = "";
 
-async function start() {
-  const env: Record<string, string | undefined> = { ...process.env, QUERIER_CONFIG_DIR: join(dir, "config") };
-  for (const k of ["QUERIER_ADMIN_USER", "QUERIER_ADMIN_PASSWORD_HASH", "QUERIER_ADMIN_PASSWORD"]) delete env[k];
+async function start(extra: Record<string, string> = {}) {
+  const env: Record<string, string | undefined> = { ...process.env, QUERIER_CONFIG_DIR: join(dir, "config"), ...extra };
+  for (const k of ["QUERIER_ADMIN_USER", "QUERIER_ADMIN_PASSWORD_HASH", "QUERIER_ADMIN_PASSWORD", "QUERIER_PUBLIC_URL", "QUERIER_ALLOW_INSECURE_LOGIN"]) delete env[k];
+  if (!extra.QUERIER_ALLOW_HTTP) delete env.QUERIER_ALLOW_HTTP;
   log = "";
   // cwd: the temporary folder, so the repository's .env isn't read
   server = Bun.spawn(["bun", resolve(import.meta.dir, "../server/app.ts"), "--port", String(PORT), "--notebooks", join(dir, "nb")], { env, cwd: dir, stdout: "pipe", stderr: "pipe" });
@@ -81,4 +82,21 @@ test("a restart: the password stays, and nothing is printed", async () => {
 
 test("only the sysadmin's password is Querier's to change", async () => {
   expect((await change("", "", "whatever it is")).status).toBe(401);
+});
+
+test("plain HTTP from another machine: passwords refused, unless QUERIER_ALLOW_HTTP opts out", async () => {
+  // as reached by a name that isn't this machine's (the Host header), over http://
+  const remote = (password: string) =>
+    fetch(`${B}/api/auth/login`, { method: "POST", headers: { host: "querier.corp", "content-type": "application/json" }, body: JSON.stringify({ provider: "sysadmin", username: "admin", password }) });
+  expect((await fetch(`${B}/api/auth/providers`).then((r) => r.json())).httpAllowed).toBe(false);
+  const refused = await remote("the admin's own passphrase");
+  expect(refused.status).toBe(403);
+  expect((await refused.json()).error).toContain("QUERIER_ALLOW_HTTP=1");
+
+  server.kill();
+  await server.exited;
+  await start({ QUERIER_ALLOW_HTTP: "1" });
+  expect((await fetch(`${B}/api/auth/providers`).then((r) => r.json())).httpAllowed).toBe(true);
+  expect((await remote("the admin's own passphrase")).status).toBe(200);
+  expect((await remote("wrong")).status).toBe(401);
 });

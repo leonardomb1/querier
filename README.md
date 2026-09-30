@@ -240,7 +240,8 @@ Every page, API call, kernel socket and AI token needs a signed-in person.
     - The redirect URI is `<QUERIER_PUBLIC_URL>/api/auth/oidc/<id>/callback`.
     - `entraGraphOverage` reads a user's groups from Microsoft Graph when there are too many for the token, which needs `GroupMember.Read.All`.
 - **Sessions:** an HttpOnly cookie. The person's groups and attributes are refreshed from their provider every 15 minutes, and a disabled account's session ends.
-- **Passwords over plain HTTP** are refused except on localhost: set `QUERIER_PUBLIC_URL` to the `https://` address.
+- **Passwords over plain HTTP** are refused except on localhost: serve it over HTTPS (a reverse proxy that ends TLS) and set `QUERIER_PUBLIC_URL` to the `https://` address.
+  - **Opting out, for now:** `QUERIER_ALLOW_HTTP=1` in `.env` takes them over plain HTTP from anywhere. Anyone on the network in between can read passwords and session cookies, so only on a network you trust, until a certificate is in place. The server warns on every start and the sign-in page says so.
 - **Audit:** every sign-in, denial and change is logged in `<config>/querier.db`.
 - **Access** is decided by one policy engine ([Cedar](https://www.cedarpolicy.com)) on every request, socket message and AI tool call:
   - **Roles and shares, as in Microsoft Fabric**, given in Manage access to a person, a directory group, everyone, or everyone whose attributes match a condition (`principal.getTag("department").contains("Finance")`): a workspace's Viewer, Contributor, Member or Admin; a notebook's Read, Run, Edit or Reshare; a connection's User or Owner.
@@ -261,6 +262,12 @@ Every page, API call, kernel socket and AI token needs a signed-in person.
 docker compose up -d             # http://localhost:3000
 docker compose logs querier      # the sysadmin's generated password, on the first start
 ```
+
+**Over HTTPS** (needed for password sign-in anywhere but localhost): put any
+reverse proxy that ends TLS in front (nginx, Caddy, Traefik, a load balancer), passing
+WebSockets through, and set `QUERIER_PUBLIC_URL` to its `https://` address and
+`QUERIER_TRUSTED_PROXIES` to its address. Or, on a network you trust and for now,
+`QUERIER_ALLOW_HTTP=1` (see Signing in).
 
 It runs the published image, `ghcr.io/leonardomb1/querier`: each release (a tag
 `v0.1.0`) publishes its version and `latest`. `QUERIER_VERSION=0.1.0` in `.env`
