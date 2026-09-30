@@ -197,7 +197,9 @@
         <span class="ic"><Icon name="shield" size={18} /></span>
         <span class="main static">
           <span class="head"><span class="name">System administrator</span><code class="id">sysadmin</code></span>
-          <span class="where">{s.sysadmin}, from the server's .env (QUERIER_ADMIN_USER): works when every directory is down</span>
+          <span class="where">
+            {s.sysadmin}, {s.sysadminSource === "env" ? "from the server's .env (QUERIER_ADMIN_USER)" : "Querier's own account (its password: the account menu)"}: works when every directory is down
+          </span>
         </span>
       </li>
     </ul>

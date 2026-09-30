@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import { backdrop } from "../lib/backdrop";
   import { openHref } from "../lib/can";
   import { onMount, tick } from "svelte";
   import { fade, scale } from "svelte/transition";
@@ -263,10 +264,12 @@
   /** "ctrl+shift+enter" → [["Ctrl","Shift","Enter"]]; "i i" → [["I"],["I"]] */
   const KEY: Record<string, string> = { ctrl: "Ctrl", shift: "Shift", alt: "Alt", meta: "⌘", enter: "Enter", "\\": "\\" };
   const chords = (keys: string) => keys.split(" ").map((c) => c.split(/\+(?!$)/).map((k) => KEY[k] ?? (k.length === 1 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1))));
+  // closes on a click on the backdrop, not on a drag that ends there (lib/backdrop.ts)
+  const shut = backdrop(() => onclose());
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" transition:fade={{ duration: 100 }} onclick={() => onclose()}>
+<div class="backdrop" transition:fade={{ duration: 100 }} {...shut}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="palette" role="dialog" tabindex="-1" aria-label="Command palette" transition:scale={{ start: 0.98, duration: 140, easing: cubicOut, opacity: 0 }} onclick={(e) => e.stopPropagation()}>
     <div class="box">

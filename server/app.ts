@@ -1454,6 +1454,8 @@ const server = Bun.serve<Client["data"], any>({
         // where OIDC providers send people back: to register with them
         redirectBase: publicUrl || new URL(r.url).origin,
         sysadmin: auth.sysadmin.principal().username,
+        // where its account lives: Querier's own (sysadmin.json, changed from the account menu), or .env's
+        sysadminSource: auth.sysadmin.source,
         admission: await admission(),
       })),
     },

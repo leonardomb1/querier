@@ -422,6 +422,8 @@ export interface AuthSettings {
   file: string;
   redirectBase: string;
   sysadmin: string;
+  /** where its account lives: Querier's own ("file": its password changed from the account menu), or the server's .env */
+  sysadminSource: "file" | "env";
   /** who may sign in: a condition over their groups and attributes (null: everyone the directories accept);
    *  `custom`: sign-in.cedar was edited as a policy file, not in this shape */
   admission: { when: string | null; custom?: boolean };

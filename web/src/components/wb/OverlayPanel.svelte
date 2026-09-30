@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdrop } from "../../lib/backdrop";
   import { onMount, type Snippet } from "svelte";
   import { cubicOut } from "svelte/easing";
   import { fade, scale } from "svelte/transition";
@@ -38,10 +39,12 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") (e.stopPropagation(), onclose());
   }
+  // closes on a click on the backdrop, not on a drag that ends there (lib/backdrop.ts)
+  const shut = backdrop(() => onclose());
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="scrim" transition:fade={{ duration: 120 }} onclick={onclose}>
+<div class="scrim" transition:fade={{ duration: 120 }} {...shut}>
   <div
     class="overlay"
     class:max

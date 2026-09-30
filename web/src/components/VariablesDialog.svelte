@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdrop } from "../lib/backdrop";
   import Select from "./ui/Select.svelte";
   import { cubicOut } from "svelte/easing";
   import { fade, scale } from "svelte/transition";
@@ -37,10 +38,12 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") (e.stopPropagation(), onclose());
   }
+  // closes on a click on the backdrop, not on a drag that ends there (lib/backdrop.ts)
+  const shut = backdrop(() => onclose());
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" transition:fade={{ duration: 140 }} onclick={onclose} {onkeydown}>
+<div class="backdrop" transition:fade={{ duration: 140 }} {...shut} {onkeydown}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="dialog" role="dialog" aria-label="Variables" tabindex="-1" transition:scale={{ start: 0.97, duration: 160, easing: cubicOut }} onclick={(e) => e.stopPropagation()}>
     <header>

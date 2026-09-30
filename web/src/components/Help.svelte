@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdrop } from "../lib/backdrop";
   import { fade, scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   let { onclose }: { onclose: () => void } = $props();
@@ -41,10 +42,12 @@
       ],
     ],
   ];
+  // closes on a click on the backdrop, not on a drag that ends there (lib/backdrop.ts)
+  const shut = backdrop(() => onclose());
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" transition:fade={{ duration: 140 }} onclick={onclose}>
+<div class="backdrop" transition:fade={{ duration: 140 }} {...shut}>
   <div class="help" transition:scale={{ start: 0.97, duration: 160, easing: cubicOut }} role="dialog" aria-label="keyboard shortcuts">
     {#each groups as [title, keys]}
       <h4>{title}</h4>
