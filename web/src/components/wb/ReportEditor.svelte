@@ -181,12 +181,21 @@
   // a cell that just failed with this code and these values is not retried on its own
   const attempted = new Map<string, string>();
   const keyOf = (c: string) => hash(ctl.sources[c] ?? "") + JSON.stringify(ctl.bound);
+  // the notebook's code when the report was last up to date: after an edit it waits for Refresh
+  // rather than run code as it is typed; opening it and its controls still run what is due
+  const codeNow = () => hash([...ctl.code].map((c) => `${c}\0${ctl.sources[c] ?? ctl.cell(c)?.source ?? ""}`).join("\0"));
+  let settledCode = codeNow();
   let runTimer: ReturnType<typeof setTimeout>;
   $effect(() => {
     if (!ctl.conn.synced || !ctl.book) return;
+    const code = codeNow();
     const due = targets.filter((c) => ctl.fresh[c] !== "fresh" && !isBusy(c) && attempted.get(c) !== keyOf(c));
     clearTimeout(runTimer);
-    if (!due.length) return;
+    if (!due.length) {
+      if (!targets.some(isBusy)) settledCode = code;
+      return;
+    }
+    if (code !== settledCode) return;
     runTimer = setTimeout(() => {
       for (const c of due) attempted.set(c, keyOf(c));
       ctl.run(due);
@@ -195,6 +204,7 @@
 
   function refresh() {
     applyTime();
+    settledCode = codeNow();
     for (const c of targets) attempted.set(c, keyOf(c));
     ctl.run(targets);
   }
