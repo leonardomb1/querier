@@ -290,6 +290,19 @@ test("sign-in settings: providers made, tested and kept in auth.json; their secr
   const t2 = (await http("root", "POST", "/admin/auth/test", { provider: { ...kc, id: "kc" } })).body;
   expect(t2.steps.some((s: any) => !s.ok)).toBe(true);
   expect(t2.redirectUri).toContain("/api/auth/oidc/kc/callback");
+  // the directory's CA: a certificate read and described, junk refused, and kept with the provider as PEM
+  const pem = await Bun.file(join(import.meta.dir, "fixtures/test-ca.pem")).text();
+  const read = (await http("root", "POST", "/admin/auth/certificate", { pem })).body;
+  expect(read.certs[0]).toMatchObject({ subject: "CN=Querier Test CA", ca: true, expired: false });
+  expect(read.certs[0].fingerprint).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
+  const der = Buffer.from(pem.replace(/-----(BEGIN|END) CERTIFICATE-----|\s/g, ""), "base64").toString("base64");
+  expect((await http("root", "POST", "/admin/auth/certificate", { der })).body.certs[0].fingerprint).toBe(read.certs[0].fingerprint);
+  expect((await http("root", "POST", "/admin/auth/certificate", { pem: "not a certificate" })).status).toBe(400);
+  expect((await http("ana", "POST", "/admin/auth/certificate", { pem })).status).toBe(403);
+  expect((await http("root", "PUT", "/admin/auth/providers/corp-ad", { provider: { ...ad, bindPassword: "", label: "AD", ca: "-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----" } })).status).toBe(400);
+  const withCa = (await http("root", "PUT", "/admin/auth/providers/corp-ad", { provider: { ...ad, bindPassword: "", label: "AD", ca: pem, caFile: "/ignored.pem" } })).body;
+  expect(withCa.ca).toBe(read.pem);
+  expect(withCa.caFile).toBeUndefined();
   // the sign-in page's order; sessions
   expect((await http("root", "PUT", "/admin/auth/order", { ids: ["kc", "corp-ad"] })).status).toBe(200);
   expect((await http("root", "GET", "/admin/auth")).body.providers.map((p: any) => p.id)).toEqual(["kc", "corp-ad"]);

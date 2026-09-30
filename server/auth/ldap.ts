@@ -55,7 +55,7 @@ export class LdapProvider {
   }
 
   private async client(): Promise<Client> {
-    const ca = this.cfg.caFile ? [await Bun.file(this.cfg.caFile).text()] : undefined;
+    const ca = this.cfg.ca ? [this.cfg.ca] : this.cfg.caFile ? [await Bun.file(this.cfg.caFile).text()] : undefined;
     // the certificate is always checked: against tlsServerName when the url names the host otherwise
     const tlsOptions = { ca, rejectUnauthorized: true, minVersion: "TLSv1.2" as const, ...(this.cfg.tlsServerName ? { servername: this.cfg.tlsServerName } : {}) };
     const c = new Client({ url: this.cfg.url, tlsOptions: this.cfg.url.startsWith("ldaps://") ? tlsOptions : undefined, timeout: 10_000, connectTimeout: 10_000 });

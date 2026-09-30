@@ -363,6 +363,16 @@ export interface AuditEntry {
   detail?: Record<string, unknown>;
 }
 /** An identity provider's settings (auth.json), as the console gets them: a stored secret never comes back. */
+/** A certificate as the server read it: to compare with what IT says it is. */
+export interface CertificateInfo {
+  subject: string;
+  issuer: string;
+  notAfter: string;
+  fingerprint: string;
+  ca: boolean;
+  expired: boolean;
+}
+
 export interface ProviderSettings {
   id: string;
   type: "ldap" | "oidc";
@@ -370,6 +380,8 @@ export interface ProviderSettings {
   // ldap
   url?: string;
   startTls?: boolean;
+  /** the CA certificate, as PEM (uploaded or pasted) */
+  ca?: string;
   caFile?: string;
   tlsServerName?: string;
   allowInsecure?: boolean;
@@ -586,6 +598,8 @@ export const api = {
       order: (ids: string[]) => call("PUT", "/admin/auth/order", { ids }),
       session: (s: AuthSettings["session"]) => call<AuthSettings["session"]>("PUT", "/admin/auth/session", s),
       admission: (when: string | null) => call<AuthSettings["admission"]>("PUT", "/admin/auth/admission", { when }),
+      /** a certificate read on the server (PEM text, or a DER file's bytes in base64): checked, and what it is */
+      certificate: (given: { pem: string } | { der: string }) => call<{ pem: string; certs: CertificateInfo[] }>("POST", "/admin/auth/certificate", given),
     },
     person: (id: string) => call<PersonDetail>("GET", `/admin/people/${encodeURIComponent(id)}`),
     audit: (q: { before?: number; limit?: number; actor?: string; action?: string; decision?: string; resource?: string }) =>

@@ -3,6 +3,7 @@
 // and auth.json (the providers: mode 600, like secrets.json). A setting's value
 // may be "env:NAME", read from the environment, so no secret need be in the file.
 
+import { X509Certificate } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,7 +35,9 @@ export interface LdapProviderConfig {
   /** ldaps://host:636, or ldap://host:389 with startTls */
   url: string;
   startTls?: boolean;
-  /** a PEM file of the CA that signed the directory's certificate */
+  /** the CA that signed the directory's certificate, as PEM (uploaded or pasted in the UI) */
+  ca?: string;
+  /** or a PEM file of it on the server */
   caFile?: string;
   /** the name on the directory's certificate, when it is reached by another (an IP, a tunnel) */
   tlsServerName?: string;
@@ -102,6 +105,50 @@ export async function saveAuthConfig(c: AuthConfig) {
   await mkdir(dirname(authFile()), { recursive: true });
   await Bun.write(authFile(), JSON.stringify(c, null, 2) + "\n");
   await chmod(authFile(), 0o600);
+}
+
+/** One certificate of a PEM, as the UI shows it: to compare with what IT says it is. */
+export interface CertificateInfo {
+  subject: string;
+  issuer: string;
+  notAfter: string;
+  fingerprint: string;
+  ca: boolean;
+  expired: boolean;
+}
+
+/** The certificates in a PEM (a CA, or a chain of them), each checked: throws when it holds none or a
+ *  broken one. A DER file (a Windows .cer) is taken too, and comes back as PEM. */
+export function readCertificates(input: string | Uint8Array): { pem: string; certs: CertificateInfo[] } {
+  const text = typeof input === "string" ? input : new TextDecoder().decode(input);
+  const blocks = text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+  const ders: Uint8Array[] = blocks.length
+    ? blocks.map((b) => Buffer.from(b.replace(/-----(BEGIN|END) CERTIFICATE-----|\s/g, ""), "base64"))
+    : typeof input !== "string" && input.length
+      ? [input]
+      : [];
+  if (!ders.length) throw new Error("That isn't a certificate: a PEM file (-----BEGIN CERTIFICATE-----) or a .cer/.crt file.");
+  const certs: CertificateInfo[] = [];
+  const pems: string[] = [];
+  for (const der of ders) {
+    let x: X509Certificate;
+    try {
+      x = new X509Certificate(Buffer.from(der));
+    } catch {
+      throw new Error("That certificate can't be read: is it the whole file?");
+    }
+    const b64 = Buffer.from(x.raw).toString("base64");
+    pems.push(`-----BEGIN CERTIFICATE-----\n${b64.match(/.{1,64}/g)!.join("\n")}\n-----END CERTIFICATE-----`);
+    certs.push({
+      subject: x.subject.replace(/\n/g, ", "),
+      issuer: x.issuer.replace(/\n/g, ", "),
+      notAfter: new Date(x.validTo).toISOString(),
+      fingerprint: x.fingerprint256,
+      ca: x.ca,
+      expired: new Date(x.validTo).getTime() < Date.now(),
+    });
+  }
+  return { pem: pems.join("\n") + "\n", certs };
 }
 
 /** A setting's value: "env:NAME" is read from the environment. */

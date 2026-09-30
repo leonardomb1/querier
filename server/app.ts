@@ -28,7 +28,7 @@ import { Kernels } from "./kernels";
 import { reportVersion, Reports, type Published, type RunAs } from "./reports";
 import { Environments, type EnvKind } from "./environments";
 import { hash } from "../shared/hash";
-import { allowInsecureLogin, authFile, clientAddress, publicUrl, type ProviderConfig } from "./auth/config";
+import { allowInsecureLogin, authFile, clientAddress, publicUrl, readCertificates, type ProviderConfig } from "./auth/config";
 
 const arg = (flag: string, fallback: string) => {
   const i = process.argv.indexOf(flag);
@@ -526,6 +526,15 @@ function showProvider(p: ProviderConfig) {
 }
 
 /** A provider from the console, checked, only the settings it may have; a blank secret keeps the stored one. */
+/** A provider's CA certificate as given (PEM): checked, and kept as clean PEM. */
+function certificateOf(pem: string): string {
+  try {
+    return readCertificates(pem).pem;
+  } catch (e: any) {
+    throw new UserError(`The CA certificate: ${e.message}`);
+  }
+}
+
 function providerFrom(b: any, existing?: ProviderConfig): ProviderConfig {
   const str = (v: unknown, what: string, required = false) => {
     const t = typeof v === "string" ? v.trim() : "";
@@ -557,7 +566,8 @@ function providerFrom(b: any, existing?: ProviderConfig): ProviderConfig {
       label,
       url,
       startTls: !!b.startTls || undefined,
-      caFile: str(b.caFile, ""),
+      ca: b.ca ? certificateOf(String(b.ca)) : undefined,
+      caFile: b.ca ? undefined : str(b.caFile, ""),
       tlsServerName: str(b.tlsServerName, ""),
       allowInsecure: !!b.allowInsecure || undefined,
       bindDn: str(b.bindDn, "The service account's DN", true)!,
@@ -1458,6 +1468,16 @@ const server = Bun.serve<Client["data"], any>({
         } else await authz.removeCustom(ADMISSION_FILE);
         auth.audit.log({ actor: r.session.principal.id, action: "auth.admission", resource: "Tenant:querier", decision: "ok", detail: { when } });
         return admission();
+      }),
+    },
+    // a CA certificate uploaded or pasted: read and described, to be checked against what IT says (not stored here)
+    "/api/admin/auth/certificate": {
+      POST: api({ on: "tenant", action: "admin.manage" }, async (_r, b) => {
+        try {
+          return readCertificates(typeof b.der === "string" ? new Uint8Array(Buffer.from(b.der, "base64")) : String(b.pem ?? ""));
+        } catch (e: any) {
+          throw new UserError(e.message);
+        }
       }),
     },
     // a provider's settings tried, saved or not, without anyone's password (LDAP: a person looked up by name)

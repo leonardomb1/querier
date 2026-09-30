@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type ProviderSettings, type ProviderTest } from "../../lib/api";
+  import { api, type CertificateInfo, type ProviderSettings, type ProviderTest } from "../../lib/api";
   import { writeClipboard } from "../../lib/copy";
   import Icon from "../Icon.svelte";
   import InfoTip from "../ui/InfoTip.svelte";
@@ -91,6 +91,50 @@
     saving = false;
   }
   const insecure = $derived(ldap && (d.url ?? "").startsWith("ldap://") && !d.startTls);
+
+  // -- the CA certificate: a file of IT's (.pem, .crt, .cer) uploaded or its PEM pasted; read on
+  // the server, and shown as what it is (whose, until when, its fingerprint) to check with IT
+  let caInfo = $state<CertificateInfo[] | null>(null);
+  let caError = $state("");
+  let pasting = $state(false);
+  let pasted = $state("");
+  let pickFile = $state<HTMLInputElement>();
+  // svelte-ignore state_referenced_locally
+  let caPath = $state(!provider.ca && !!provider.caFile);
+  async function readCa(given: { pem: string } | { der: string }) {
+    caError = "";
+    try {
+      const r = await api.admin.auth.certificate(given);
+      d.ca = r.pem;
+      d.caFile = "";
+      caInfo = r.certs;
+      pasting = false;
+      pasted = "";
+      caPath = false;
+    } catch (e: any) {
+      caError = e.message;
+    }
+  }
+  async function uploaded(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    (e.currentTarget as HTMLInputElement).value = "";
+    if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const text = new TextDecoder().decode(bytes);
+    if (text.includes("-----BEGIN")) return readCa({ pem: text });
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return readCa({ der: btoa(bin) });
+  }
+  function removeCa() {
+    d.ca = undefined;
+    caInfo = null;
+  }
+  // the one saved: shown as what it is
+  // svelte-ignore state_referenced_locally
+  if (provider.ca) api.admin.auth.certificate({ pem: provider.ca }).then((r) => (caInfo = r.certs), (e) => (caError = e.message));
+  const cn = (dn: string) => /CN=([^,]+)/.exec(dn)?.[1] ?? dn;
+  const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 </script>
 
 {#snippet field(label: string, info?: string)}
@@ -130,10 +174,43 @@
             {/if}
           </div>
           <div class="grid">
-            <label>
-              {@render field("CA certificate", "A PEM file on the server, of the CA that signed the directory's certificate. The certificate is always checked.")}
-              <input class="mono" bind:value={d.caFile} placeholder="/data/config/corp-ca.pem" spellcheck="false" />
-            </label>
+            <div class="ca">
+              {@render field("CA certificate", "The CA that signed the directory's certificate: its file from IT (.pem, .crt or .cer), or its text. The directory's certificate is always checked against it; compare the fingerprint with IT's.")}
+              {#if d.ca && caInfo}
+                {#each caInfo as c (c.fingerprint)}
+                  <div class="cert" class:warn={!c.ca || c.expired}>
+                    <Icon name={!c.ca || c.expired ? "warning" : "verified"} size={16} />
+                    <div class="what">
+                      <span class="name" title={c.subject}>{cn(c.subject)}</span>
+                      <span class="meta">{c.expired ? "expired" : "until"} {day(c.notAfter)}{c.ca ? "" : " · not a CA: the directory's own certificate?"}</span>
+                      <button class="fp mono" title="SHA-256 fingerprint: click to copy" onclick={() => writeClipboard(c.fingerprint)}>{c.fingerprint}</button>
+                    </div>
+                  </div>
+                {/each}
+                <div class="ca-acts">
+                  <button class="btn" onclick={() => pickFile?.click()}>Replace</button>
+                  <button class="btn" onclick={removeCa}>Remove</button>
+                </div>
+              {:else if caPath}
+                <input class="mono" bind:value={d.caFile} placeholder="/data/config/corp-ca.pem" spellcheck="false" aria-label="A PEM file on the server" />
+                <button class="link" onclick={() => ((caPath = false), (d.caFile = ""))}>Upload one instead</button>
+              {:else if pasting}
+                <!-- svelte-ignore a11y_autofocus -->
+                <textarea class="mono" bind:value={pasted} rows="5" placeholder="-----BEGIN CERTIFICATE-----" spellcheck="false" autofocus></textarea>
+                <div class="ca-acts">
+                  <button class="btn primary" disabled={!pasted.trim()} onclick={() => readCa({ pem: pasted })}>Use it</button>
+                  <button class="btn" onclick={() => ((pasting = false), (pasted = ""))}>Cancel</button>
+                </div>
+              {:else}
+                <div class="ca-acts">
+                  <button class="btn" onclick={() => pickFile?.click()}><Icon name="cloud-upload" size={14} />Upload…</button>
+                  <button class="btn" onclick={() => (pasting = true)}>Paste</button>
+                  <button class="link" onclick={() => (caPath = true)}>or a file on the server</button>
+                </div>
+              {/if}
+              {#if caError}<span class="bad">{caError}</span>{/if}
+              <input bind:this={pickFile} type="file" accept=".pem,.crt,.cer,.der,application/x-x509-ca-cert" hidden onchange={uploaded} />
+            </div>
             <label>
               {@render field("Name on its certificate", "When the address names the directory otherwise (an IP, a tunnel): the name its certificate was issued to.")}
               <input class="mono" bind:value={d.tlsServerName} placeholder="dc1.corp.example.com" spellcheck="false" />
@@ -340,6 +417,83 @@
 {/snippet}
 
 <style>
+  /* the CA certificate: what it is, or how to give one */
+  .ca {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+  .cert {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    padding: 0.5rem 0.625rem;
+    color: var(--good);
+    background: var(--wb-input);
+    border: 1px solid var(--wb-input-border);
+    border-radius: 4px;
+  }
+  .cert.warn {
+    color: var(--warning);
+  }
+  .what {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+    color: var(--wb-fg);
+  }
+  .what .name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .what .meta {
+    font-size: 0.75rem;
+    color: var(--wb-fg-muted);
+  }
+  .what .fp {
+    padding: 0;
+    font-size: 0.6875rem;
+    text-align: left;
+    color: var(--wb-fg-muted);
+    word-break: break-all;
+  }
+  .what .fp:hover {
+    color: var(--wb-fg);
+  }
+  .ca-acts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+  .ca textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.375rem 0.5rem;
+    resize: vertical;
+    font-size: 0.72rem;
+    color: var(--wb-fg);
+    background: var(--wb-input);
+    border: 1px solid var(--wb-input-border);
+    border-radius: 4px;
+  }
+  .ca textarea:focus {
+    outline: none;
+    border-color: var(--wb-accent);
+  }
+  .link {
+    padding: 0;
+    font-size: 0.75rem;
+    color: var(--wb-accent);
+    align-self: flex-start;
+  }
+  .link:hover {
+    text-decoration: underline;
+  }
   .wrap {
     display: flex;
     flex-direction: column;
