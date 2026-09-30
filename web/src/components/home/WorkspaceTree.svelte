@@ -516,12 +516,16 @@
     align-items: center;
     gap: 1px;
   }
+  /* shown while the pointer is on the row, and while its menu is open (the menu is inside: hidden with
+     the row's actions, it would go as the pointer moves onto it) */
   .row:hover .inline,
-  .row:focus-within .inline {
+  .row:focus-within .inline,
+  .row:has(:global(:popover-open)) .inline {
     display: flex;
   }
   .row:hover .count,
-  .row:focus-within .count {
+  .row:focus-within .count,
+  .row:has(:global(:popover-open)) .count {
     display: none;
   }
   .inline :global(.icon) {

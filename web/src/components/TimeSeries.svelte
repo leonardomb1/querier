@@ -118,9 +118,10 @@
     color: var(--wb-fg-dim);
     font-variant-numeric: tabular-nums;
   }
+  /* the line starts a little before the window (so it reaches the left edge): clipped to the chart */
   svg {
     display: block;
-    overflow: visible;
+    overflow: hidden;
   }
   .grid {
     stroke: var(--wb-border);

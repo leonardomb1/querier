@@ -416,7 +416,8 @@
     opacity: 0;
   }
   li:hover .acts,
-  li:focus-within .acts {
+  li:focus-within .acts,
+  li:has(:global(:popover-open)) .acts {
     opacity: 1;
   }
   .acts :global(.icon) {

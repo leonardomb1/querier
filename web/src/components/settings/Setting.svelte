@@ -102,7 +102,8 @@
     opacity: 0;
   }
   .setting:hover .gear,
-  .setting:focus-within .gear {
+  .setting:focus-within .gear,
+  .setting:has(:global(:popover-open)) .gear {
     opacity: 1;
   }
   .gear :global(button.icon) {
