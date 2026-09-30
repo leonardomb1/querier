@@ -72,6 +72,7 @@ COPY --from=web /src/web/dist web/dist
 # report templates are bundled on the server with the runtime they import as
 # "querier" (server/template.ts), from these sources
 COPY web/src web/src
+COPY LICENSE NOTICE ./
 ENV QUERIER_RUNNER=firecracker \
     QUERIER_PYTHON=/usr/bin/python3 \
     QUERIER_NOTEBOOKS=/data/notebooks \

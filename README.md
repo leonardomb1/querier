@@ -303,3 +303,7 @@ result is cut there) override the defaults.
 - `server/mcp/`: the MCP server for AI clients (tools, access levels, tokens).
 - `server/app.ts` serves REST for files, a WebSocket per notebook, `/mcp`, and the built UI.
 - `web/` is the Svelte 5 UI: Monaco (VS Code's editor) with Shiki's TextMate grammars for the code (Svelte, Python, Markdown, and basalt's own in `lib/basalt-grammar.ts`), a virtualized Arrow table.
+
+## License
+
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE).

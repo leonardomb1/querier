@@ -1,6 +1,7 @@
 {
   "name": "querier",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "bun --watch server/app.ts & bunx --bun vite --config web/vite.config.ts; kill %1",

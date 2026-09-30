@@ -146,4 +146,8 @@ jobs:
           ${fence}"
           flags=()
           [[ "$version" == *-* ]] && flags+=(--prerelease)
+          # a tag moved to another commit makes its release again
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --notes "$notes" "${flags[@]}"
