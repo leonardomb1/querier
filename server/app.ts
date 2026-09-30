@@ -1755,9 +1755,13 @@ const server = Bun.serve<Client["data"], any>({
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
       if (ws.data.report) return void (await reportMessage(ws, msg));
       const h = hostOf(ws.data.nb, ws.data.principal);
-      // every message is checked, with the policies as they are now (a revoked grant stops at once)
+      // every message is checked, with the policies as they are now (a revoked grant stops at once);
+      // the checks take turns, so messages are acted on in the order they came (a terminal's
+      // keystrokes after its opening), while the work itself doesn't wait on the one before
       const action = SOCKET_NEEDS[msg.op as keyof typeof SOCKET_NEEDS];
-      if (!action || !authz.can(ws.data.principal, action, await authz.notebook(ws.data.nb))) return refuseSocket(ws, msg, action);
+      const allowed = (ws.data.order ?? Promise.resolve()).then(async () => !!action && authz.can(ws.data.principal, action, await authz.notebook(ws.data.nb)));
+      ws.data.order = allowed.catch(() => false);
+      if (!(await allowed)) return refuseSocket(ws, msg, action);
       switch (msg.op) {
         case "run":
           await rooms.flush(ws.data.nb);

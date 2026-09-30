@@ -57,6 +57,8 @@ export type Client = ServerWebSocket<{
   report?: boolean;
   /** editing together (collab.ts): the notebook's shared room, not a kernel */
   collab?: { canEdit: boolean; recheck?: ReturnType<typeof setInterval> };
+  /** its messages' permission checks, one after another: they are acted on in the order they came */
+  order?: Promise<unknown>;
 }>;
 
 let batches = 0;

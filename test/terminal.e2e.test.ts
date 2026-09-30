@@ -76,7 +76,9 @@ afterAll(async () => {
 test("a terminal: a shell in one's kernel, in the notebook's folder, until it exits", async () => {
   const t = await terminal(3940, "ana");
   t.ws.send(JSON.stringify({ op: "terminal-input", term: "t1", data: "echo made-$((6*7)); ls\n" }));
-  expect(await until(() => t.out.includes("made-42") && t.out.includes("01_q.sql"))).toBe(true);
+  const ran = await until(() => t.out.includes("made-42") && t.out.includes("01_q.sql"));
+  if (!ran) console.error("the terminal printed:", JSON.stringify(t.out), "and ended:", JSON.stringify(t.exit));
+  expect(ran).toBe(true);
   t.ws.send(JSON.stringify({ op: "terminal-resize", term: "t1", cols: 50, rows: 10 }));
   t.ws.send(JSON.stringify({ op: "terminal-input", term: "t1", data: "stty size; exit 3\n" }));
   expect(await until(() => t.exit !== null)).toBe(true);
