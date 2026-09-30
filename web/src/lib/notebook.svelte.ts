@@ -6,6 +6,7 @@ import { api, type Action, type ConnectionInfo, type GitStatus, type Lang, type 
 import { hash } from "../../../shared/hash";
 import { nbHref } from "./href";
 import { Collab } from "./collab.svelte";
+import { writeClipboard } from "./copy";
 import { session } from "./session.svelte";
 import { NotebookConn, type Diagnostic } from "./conn.svelte";
 import type { HoverInfo } from "./editor";
@@ -572,7 +573,7 @@ export class NotebookCtl {
   insert(text: string) {
     const target = this.lastEditor && this.editors[this.lastEditor];
     if (target) target.insert(text);
-    else navigator.clipboard?.writeText(text);
+    else void writeClipboard(text).catch(() => {});
   }
 
   // -- structure

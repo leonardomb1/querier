@@ -3,6 +3,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { Terminal } from "@xterm/xterm";
   import { onMount } from "svelte";
+  import { writeClipboard } from "../../lib/copy";
   import type { NotebookCtl } from "../../lib/notebook.svelte";
 
   // A terminal, as VS Code's: a shell in this person's kernel's microVM, over the
@@ -40,7 +41,8 @@
     if (!term || !fit) return;
     ended = "";
     running = true;
-    id = crypto.randomUUID().slice(0, 8);
+    // (getRandomValues: randomUUID is only there on an https page, and Querier may be served over http)
+    id = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, "0")).join("");
     const mine = id;
     term.writeln(dim("A shell in your kernel's sandbox, with its connections. The notebook's files are read-only here;"));
     term.writeln(dim("what you write or install is gone when the kernel restarts (lasting packages: the notebook's Environment settings)."));
@@ -75,7 +77,7 @@
       if (e.type !== "keydown" || !(e.ctrlKey || e.metaKey)) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && term!.hasSelection()) {
-        navigator.clipboard?.writeText(term!.getSelection());
+        void writeClipboard(term!.getSelection()).catch(() => {});
         term!.clearSelection();
         return false;
       }
