@@ -1,9 +1,10 @@
 # Querier with each notebook session in a Firecracker microVM.
-#   docker compose up --build        → http://localhost:3000
+#   docker compose up -d             → http://localhost:3000 (the published image)
+#   docker compose up -d --build     → built from this checkout instead
 services:
   querier:
     build: .
-    image: querier
+    image: ghcr.io/leonardomb1/querier:${QUERIER_VERSION:-latest}
     # the sysadmin (QUERIER_ADMIN_USER, QUERIER_ADMIN_PASSWORD_HASH) and other settings: see .env.example
     env_file: .env
     ports: ["3000:3000"]
