@@ -5,6 +5,7 @@
 import { join, resolve } from "node:path";
 import { Host, type CellOutput, type Client } from "./host";
 import { Rooms } from "./collab";
+import { deliver, drained } from "./socket";
 import * as os from "node:os";
 import { encodeFrame } from "./runner/protocol";
 import { FirecrackerRunner } from "./runner/firecracker";
@@ -688,7 +689,7 @@ const SOCKET_NEEDS = {
 /** A refused socket message: answered, so the page isn't left waiting. */
 function refuseSocket(ws: Client, msg: { op?: string; id?: number }, action: Action | undefined) {
   const message = action ? `You don't have permission to ${WORDS[action] ?? action}.` : `Unknown request \`${msg.op}\`.`;
-  const frame = (meta: object) => ws.send(encodeFrame(meta));
+  const frame = (meta: object) => deliver(ws, encodeFrame(meta));
   if (msg.op === "complete") frame({ type: "complete", id: msg.id, start: 0, end: 0, items: [] });
   else if (msg.op === "check") frame({ type: "check", id: msg.id, diagnostics: [] });
   else if (msg.op === "inspect") frame({ type: "inspect", id: msg.id, columns: [], rows: [], error: message });
@@ -711,14 +712,14 @@ async function reportMessage(ws: Client, msg: any): Promise<unknown> {
   const nb = ws.data.nb;
   if (!action || !authz.can(ws.data.principal, action, await authz.notebook(nb))) return refuseSocket(ws, msg, action);
   const p = reports.get(nb);
-  if (!p) return ws.send(encodeFrame({ type: "gone" }));
+  if (!p) return deliver(ws, encodeFrame({ type: "gone" }));
   let h: Host;
   try {
     h = reportHostOf(nb, ws.data.principal);
   } catch (e: any) {
-    return ws.send(encodeFrame({ type: "denied", op: msg.op, message: e.message }));
+    return deliver(ws, encodeFrame({ type: "denied", op: msg.op, message: e.message }));
   }
-  const deny = (message: string) => ws.send(encodeFrame({ type: "denied", op: msg.op, message }));
+  const deny = (message: string) => deliver(ws, encodeFrame({ type: "denied", op: msg.op, message }));
   // published again since this tab opened: it follows the new report kernel
   if (!h.clients.has(ws)) h.attach(ws);
   switch (msg.op) {
@@ -751,6 +752,9 @@ async function reportMessage(ws: Client, msg: any): Promise<unknown> {
 }
 
 /** Open sockets by session: they close when it ends (signed out, expired, the account disabled). */
+/** A socket as the collab room sees it: what it is sent waits while the socket is full (socket.ts). */
+const peers = new WeakMap<Client, { send(data: Uint8Array): void }>();
+const peerOf = (ws: Client) => peers.get(ws) ?? peers.set(ws, { send: (data) => deliver(ws, data) }).get(ws)!;
 const sockets = new Map<string, Set<Client>>();
 auth.onEnded((sid) => {
   for (const ws of sockets.get(sid) ?? []) ws.close(4401, "signed out");
@@ -1784,6 +1788,10 @@ const server = Bun.serve<Client["data"], any>({
   },
 
   websocket: {
+    // what waited while a socket was full goes now (socket.ts)
+    drain(ws: Client) {
+      drained(ws);
+    },
     open(ws: Client) {
       (sockets.get(ws.data.sid) ?? sockets.set(ws.data.sid, new Set()).get(ws.data.sid)!).add(ws);
       if (ws.data.collab) {
@@ -1792,12 +1800,12 @@ const server = Bun.serve<Client["data"], any>({
         c.recheck = setInterval(async () => {
           c.canEdit = authz.can(ws.data.principal, "notebook.edit", await authz.notebook(ws.data.nb), true);
         }, 5000);
-        return void rooms.join(ws.data.nb, ws, ws.data.principal, () => c.canEdit).catch(() => ws.close(4404, "no notebook"));
+        return void rooms.join(ws.data.nb, peerOf(ws), ws.data.principal, () => c.canEdit).catch(() => ws.close(4404, "no notebook"));
       }
       try {
         (ws.data.report ? reportHostOf(ws.data.nb, ws.data.principal) : hostOf(ws.data.nb, ws.data.principal)).attach(ws);
       } catch (e: any) {
-        ws.send(encodeFrame({ type: "denied", op: "open", message: e.message }));
+        deliver(ws, encodeFrame({ type: "denied", op: "open", message: e.message }));
         ws.close(4404, "not published");
       }
     },
@@ -1806,12 +1814,12 @@ const server = Bun.serve<Client["data"], any>({
       if (!sockets.get(ws.data.sid)?.size) sockets.delete(ws.data.sid);
       if (ws.data.collab) {
         clearInterval(ws.data.collab.recheck);
-        return void rooms.leave(ws.data.nb, ws);
+        return void rooms.leave(ws.data.nb, peerOf(ws));
       }
       hosts.get(ws.data.report ? reportKey(ws.data.nb, ws.data.principal.id) : hostKey(ws.data.nb, ws.data.principal.id))?.detach(ws);
     },
     async message(ws: Client, raw) {
-      if (ws.data.collab) return rooms.message(ws.data.nb, ws, typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw));
+      if (ws.data.collab) return rooms.message(ws.data.nb, peerOf(ws), typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw));
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
       if (ws.data.report) return void (await reportMessage(ws, msg));
       const h = hostOf(ws.data.nb, ws.data.principal);

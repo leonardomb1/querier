@@ -40,7 +40,17 @@
 
   const table = $derived(arrowTable(out.arrow));
   const fmt = new Intl.NumberFormat();
+  // what is typed, and the query it becomes once typing stops (or on Enter): a search over a
+  // big result is work, for the page and for the kernel, so not one per keystroke
+  let typed = $state("");
   let query = $state("");
+  let settleTimer: ReturnType<typeof setTimeout>;
+  $effect(() => {
+    const t = typed;
+    clearTimeout(settleTimer);
+    if (!t.trim()) query = t;
+    else settleTimer = setTimeout(() => (query = t), 400);
+  });
   let searching = $state(false);
   let matches = $state(0);
 
@@ -49,26 +59,36 @@
   let full = $state<{ table: ReturnType<typeof arrowTable>; rows: number; of: number; truncated: boolean } | null>(null);
   let fullError = $state("");
   let asking = $state(false);
-  let searchTimer: ReturnType<typeof setTimeout>;
+  // one search at the kernel at a time: asked for another meanwhile, only the latest goes next
+  let inFlight = false;
+  let next: { terms: Term[]; asked: string } | null = null;
+  async function ask(t: Term[], asked: string) {
+    if (inFlight) return void (next = { terms: t, asked });
+    inFlight = true;
+    const r = await onsearch!(t).catch((e) => ({ rows: 0, of: 0, truncated: false, error: e.message }) as Found);
+    inFlight = false;
+    if (next) {
+      const n = next;
+      next = null;
+      return ask(n.terms, n.asked);
+    }
+    if (asked !== query) return; // cleared, or changed to what needs no search
+    asking = false;
+    fullError = r.error ?? "";
+    full = r.error || !r.arrow ? null : { table: arrowTable(r.arrow), rows: r.rows, of: r.of, truncated: r.truncated };
+  }
   $effect(() => {
     const t = terms;
     void out;
-    clearTimeout(searchTimer);
     if (!onsearch || !out.truncated || !t.length) {
+      next = null;
       full = null;
       fullError = "";
       asking = false;
       return;
     }
     asking = true;
-    const asked = query;
-    searchTimer = setTimeout(async () => {
-      const r = await onsearch(t).catch((e) => ({ rows: 0, of: 0, truncated: false, error: e.message }) as Found);
-      if (asked !== query) return; // a later search is on its way
-      asking = false;
-      fullError = r.error ?? "";
-      full = r.error || !r.arrow ? null : { table: arrowTable(r.arrow), rows: r.rows, of: r.of, truncated: r.truncated };
-    }, 300);
+    ask(t, query);
   });
   const shown = $derived(full?.table ?? table);
 
@@ -76,11 +96,14 @@
   // counts what it finds, and says how it read the query; its syntax is a click away
   let help = $state(false);
   let input = $state<HTMLInputElement>();
+  /** the box is being typed in: how the query was read shows then, and not over the rows after */
+  let focused = $state(false);
   function open() {
     searching = true;
     requestAnimationFrame(() => input?.focus());
   }
   function close() {
+    typed = "";
     query = "";
     searching = false;
     help = false;
@@ -88,7 +111,7 @@
   const OPS: Record<string, string> = { has: "contains", "=": "=", "!=": "≠", ">": ">", ">=": "≥", "<": "<", "<=": "≤" };
   /** each term as it was understood: which column, which comparison */
   const readAs = $derived(terms.map((t) => `${t.not ? "not " : ""}${t.col ?? "any column"} ${OPS[t.op]} ${t.value}`));
-  const count = $derived(query ? (full ? full.rows : asking ? null : matches) : null);
+  const count = $derived(typed ? (typed !== query ? null : full ? full.rows : asking ? null : matches) : null);
   const EXAMPLES: [string, string][] = [
     ["000600", "any column contains it"],
     ["customer:000600", "that column contains it"],
@@ -119,20 +142,27 @@
       {#if exportError}<span class="warn" title={exportError}>· download failed: {exportError}</span>{/if}
     </span>
     <span class="tools">
-      {#if searching || query}
+      {#if searching || typed}
         <div class="find" transition:slide={{ axis: "x", duration: 160, easing: cubicOut }}>
           <span class="find-ic"><Icon name="search" size={14} /></span>
           <input
             bind:this={input}
             placeholder="Search rows"
             aria-label="Search the rows"
-            bind:value={query}
+            bind:value={typed}
             spellcheck="false"
             autocomplete="off"
-            onkeydown={(e) => e.key === "Escape" && (e.stopPropagation(), close())}
-            onblur={(e) => !query && !(e.relatedTarget as HTMLElement | null)?.closest(".find") && close()}
+            onkeydown={(e) => {
+              if (e.key === "Escape") (e.stopPropagation(), close());
+              else if (e.key === "Enter") (clearTimeout(settleTimer), (query = typed));
+            }}
+            onfocus={() => (focused = true)}
+            onblur={(e) => {
+              focused = false;
+              if (!typed && !(e.relatedTarget as HTMLElement | null)?.closest(".find")) close();
+            }}
           />
-          {#if query}
+          {#if typed}
             <span class="count" class:none={count === 0} transition:fade={{ duration: 100 }}>
               {count == null ? "…" : count === 0 ? "No results" : `${fmt.format(count)} ${count === 1 ? "row" : "rows"}`}
             </span>
@@ -141,7 +171,7 @@
             <Icon name="question" size={14} />
           </button>
           <button class="icon" title="Close  (Escape)" aria-label="Close the search" onclick={close}><Icon name="close" size={14} /></button>
-          {#if help || (query && readAs.some((r) => !r.startsWith("any column contains")))}
+          {#if help || (focused && query && readAs.some((r) => !r.startsWith("any column contains")))}
             <div class="find-pop" transition:scale={{ start: 0.97, duration: 120, easing: cubicOut, opacity: 0 }}>
               {#if query && readAs.length}
                 <p class="read">Read as <span>{#each readAs as r, i}{#if i}<em>and</em>{/if}<code>{r}</code>{/each}</span></p>

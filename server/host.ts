@@ -10,6 +10,7 @@ import { hash } from "../shared/hash";
 import { edges, freshness, plan } from "../shared/graph";
 import { analyze, type Deps } from "./analyze";
 import { encodeFrame } from "./runner/protocol";
+import { deliver } from "./socket";
 import { checkCli } from "./check";
 import type { CellEvent, CodeLang, Diagnostic, ExportFormat, Inspection, Namespace, Runner, Sandbox, Session, Shell } from "./runner/types";
 import { Monitor, parseExposition, type Scope } from "./metrics";
@@ -221,7 +222,7 @@ export class Host {
 
   private send(to: Iterable<Client>, meta: object, data?: Uint8Array) {
     const frame = encodeFrame(meta, data);
-    for (const c of to) c.send(frame);
+    for (const c of to) deliver(c, frame);
   }
 
   broadcast(meta: object, data?: Uint8Array) {
