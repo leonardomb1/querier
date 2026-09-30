@@ -6,7 +6,7 @@
 
   // Signing in: a button per OIDC provider (Microsoft Entra, Keycloak…), and a
   // username and password for a directory (Active Directory) or the sysadmin.
-  let { providers, next, error: given, insecure }: { providers: SignIn[]; next: string; error: string; insecure: false | "refused" | "allowed" } = $props();
+  let { providers, next, error: given, insecure }: { providers: SignIn[]; next: string; error: string; insecure: boolean } = $props();
 
   // svelte-ignore state_referenced_locally
   const redirects = providers.filter((p) => p.kind === "redirect");
@@ -72,10 +72,8 @@
           {/each}
         </div>
       {/if}
-      {#if insecure === "refused"}
+      {#if insecure}
         <p class="warn"><Icon name="warning" size={14} />This page isn't served over HTTPS: passwords would travel in the clear, so the server refuses them.</p>
-      {:else if insecure === "allowed"}
-        <p class="warn"><Icon name="warning" size={14} />Not over HTTPS: your password travels in the clear on this network. Allowed here for now by the administrator.</p>
       {/if}
       <form onsubmit={submit}>
         <label>

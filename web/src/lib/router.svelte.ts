@@ -14,7 +14,7 @@ export type Route =
   | { page: "report"; name: string; book: Notebook }
   /** a published report, as its viewers get it */
   | { page: "view"; name: string; book: Notebook }
-  | { page: "login"; providers: SignIn[]; next: string; error: string; insecure: false | "refused" | "allowed" }
+  | { page: "login"; providers: SignIn[]; next: string; error: string; insecure: boolean }
   | { page: "error"; status: number; title: string; message: string; retry: boolean };
 
 function failure(e: unknown, what: string): Route {
@@ -41,9 +41,9 @@ async function load(hash: string): Promise<Route | null> {
     }
     try {
       const { providers, httpAllowed } = await api.auth.providers();
-      // plain HTTP, not this machine: passwords refused, or taken (QUERIER_ALLOW_HTTP) with a warning
+      // plain HTTP, not this machine: passwords are refused, unless the server opted out (QUERIER_ALLOW_HTTP)
       const plain = location.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-      return { ...where, providers, insecure: plain ? (httpAllowed ? "allowed" : "refused") : false };
+      return { ...where, providers, insecure: plain && !httpAllowed };
     } catch (e) {
       return failure(e, "The login page");
     }
