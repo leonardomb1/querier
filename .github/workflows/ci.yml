@@ -1,0 +1,98 @@
+# Tests, then the image. Only when source changes: the server, the web app, the
+# kernel, the tests, the image and what builds them; not the README, the license
+# or the example settings.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths: &source
+      - "server/**"
+      - "web/**"
+      - "shared/**"
+      - "kernel/**"
+      - "scripts/**"
+      - "test/**"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig.json"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "compose.yaml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths: *source
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch or pull request replaces a run still going
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Type check and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: Dockerfile
+
+      # what the local kernel runs with, as the microVM's image has it: the same
+      # basalt release and Python packages, read from the Dockerfile
+      - name: basalt
+        run: |
+          version=$(sed -n 's/^ARG BASALT_VERSION=//p' Dockerfile)
+          base="https://github.com/leonardomb1/basalt/releases/download/${version}"
+          curl -fsSL -o /tmp/basalt "${base}/basalt-x86_64-linux"
+          curl -fsSL -o /tmp/basalt.sha256 "${base}/basalt-x86_64-linux.sha256"
+          echo "$(cut -d' ' -f1 /tmp/basalt.sha256)  /tmp/basalt" | sha256sum -c -
+          sudo install -m 755 /tmp/basalt /usr/local/bin/basalt
+          basalt --version
+
+      - name: The kernel's Python
+        run: |
+          mapfile -t packages < <(sed -n '/pip install/,/&&/p' Dockerfile | grep -oE '[A-Za-z_]+==[0-9][0-9.]*')
+          echo "packages: ${packages[*]}"
+          uv venv .venv --python 3.13
+          uv pip install --python .venv/bin/python "${packages[@]}"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+      - name: Tests
+        run: bun test --timeout 180000
+
+  image:
+    name: Image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: querier:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
