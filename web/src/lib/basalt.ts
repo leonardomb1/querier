@@ -3,7 +3,7 @@
 // line of docs (from basalt's language.md) for completion, hover and parameter hints.
 
 const KEYWORD_TEXT = `select from where group by order having limit offset as and or not in is null like between case when then else end
-join inner left right full cross semi anti on using with distinct union all asc desc nulls first last over partition rows range
+join inner left right full cross semi anti on using with distinct union intersect all asc desc nulls first last over partition rows range
 preceding following current row unbounded exists true false cast try_cast load into append replace upsert partial cols split jobs
 param let throw create connection function resource options type default body header endpoint doc accept buffer at segment
 retain until loaded hours flush every seconds explain analyze describe show tables print for each of parallel sequential continue
