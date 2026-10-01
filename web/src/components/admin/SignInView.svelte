@@ -130,6 +130,28 @@
       sessionError = err.message;
     }
   }
+  // -- public links to reports: off unless allowed here, and never from outside these networks
+  let publicEnabled = $state(false);
+  let publicNetworks = $state("");
+  let publicError = $state("");
+  let publicSaved = $state(false);
+  $effect(() => {
+    if (!s) return;
+    publicEnabled = s.publicLinks?.enabled ?? false;
+    publicNetworks = (s.publicLinks?.networks ?? []).join(", ");
+  });
+  async function savePublic(e: SubmitEvent) {
+    e.preventDefault();
+    publicError = "";
+    try {
+      const saved = await api.admin.auth.publicLinks({ enabled: publicEnabled, networks: publicNetworks.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean) });
+      if (s) s.publicLinks = saved;
+      publicSaved = true;
+      setTimeout(() => (publicSaved = false), 2000);
+    } catch (err: any) {
+      publicError = err.message;
+    }
+  }
   // -- who may sign in: a condition, written as the managed policy sign-in.cedar
   let admitting = $state(false);
   let vocabulary = $state<CedarVocabulary | null>(null);
@@ -245,6 +267,21 @@
       <button class="primary" type="submit" disabled={!sessionDirty}>{sessionSaved ? "Saved" : "Save"}</button>
     </form>
     {#if sessionError}<p class="error">{sessionError}</p>{/if}
+
+    <h3>Public links</h3>
+    <form class="public" onsubmit={savePublic}>
+      <p class="muted">
+        A published report's Admin or Member can give it a link anyone opens without signing in: its last run as its owner, no code, no controls.
+        <InfoTip text="Off, no public link works (they come back as they were when it is on again). Each link can narrow the networks further, end on a date, ask a passcode and be kept out of other sites' frames." />
+      </p>
+      <label class="check"><input type="checkbox" bind:checked={publicEnabled} />Allow public links</label>
+      <label>
+        <span>Only from these networks <span class="muted">(optional)</span></span>
+        <input class="text mono" bind:value={publicNetworks} disabled={!publicEnabled} placeholder="anywhere: or 10.0.0.0/8, 192.168.0.0/16" spellcheck="false" />
+      </label>
+      <button class="primary" type="submit">{publicSaved ? "Saved" : "Save"}</button>
+    </form>
+    {#if publicError}<p class="error">{publicError}</p>{/if}
   {:else if !error}
     <p class="muted">Loading…</p>
   {/if}
@@ -277,6 +314,32 @@
 {/if}
 
 <style>
+  /* public links: on or off, and within which networks */
+  .public {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    max-width: 40rem;
+  }
+  .public p {
+    margin: 0;
+  }
+  .public label:not(.check) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    width: 100%;
+  }
+  .public .mono {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+  }
+  .public .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
   .providers {
     margin: 0;
     padding: 0;

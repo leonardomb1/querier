@@ -8,7 +8,7 @@
 // Terms are ANDed. A name that isn't a column leaves the token as plain text.
 // The browser applies it to the rows it holds; the kernel to the whole result.
 
-export type Op = "has" | "=" | "!=" | ">" | ">=" | "<" | "<=";
+export type Op = "has" | "=" | "!=" | ">" | ">=" | "<" | "<=" | "in";
 
 export interface Term {
   /** the column, as the result names it; null for any column */
@@ -16,6 +16,8 @@ export interface Term {
   op: Op;
   value: string;
   not: boolean;
+  /** "in": any of these values (a column filter's checklist); null for the empty cells */
+  values?: (string | null)[];
 }
 
 const TOKEN = /(-?)(?:([A-Za-z_][\w$]*)\s*(:|>=|<=|!=|=|>|<)\s*)?(?:"([^"]*)"?|(\S+))/g;
@@ -51,6 +53,12 @@ export interface SearchCol {
 
 function test(t: Term, c: SearchCol, row: number): boolean {
   const v = c.vec.get(row);
+  if (t.op === "in") {
+    const vals = t.values ?? [];
+    if (v == null) return vals.includes(null);
+    const want = new Set(vals.filter((x): x is string => x != null).map((x) => x.toLowerCase()));
+    return want.has(c.plain(v).toLowerCase()) || want.has((c.fmt(v) ?? "").toLowerCase());
+  }
   if (v == null) return false;
   const want = t.value.toLowerCase();
   const plain = c.plain(v).toLowerCase();

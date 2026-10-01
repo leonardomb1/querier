@@ -146,8 +146,22 @@ export class NotebookConn {
     private onNotebookChanged: () => void,
     /** a published report's viewer: their report kernel, not the notebook's */
     private report = false,
+    /** no socket: a public link's page, given its last run as frames (feed) */
+    offline = false,
   ) {
-    this.connect();
+    if (!offline) this.connect();
+  }
+
+  /** A run's frames, as a report socket would have sent them (a public link's last run). */
+  feed(buf: ArrayBuffer) {
+    this.runs = {};
+    const view = new DataView(buf);
+    for (let at = 0; at < buf.byteLength; ) {
+      const n = view.getUint32(at);
+      const m = view.getUint32(at + 4 + n);
+      this.handle(decode(buf.slice(at, at + 8 + n + m)));
+      at += 8 + n + m;
+    }
   }
 
   private connect() {

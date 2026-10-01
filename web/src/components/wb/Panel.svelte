@@ -56,7 +56,7 @@
         Problems{#if errors + warnings}<span class="badge">{errors + warnings}</span>{/if}
       </button>
       {#if mayShell}
-        <button role="tab" aria-selected={tab === "terminal"} class:on={tab === "terminal"} title="A shell in your kernel's sandbox  (Ctrl+`)" onclick={() => ((wb.panelTab = "terminal"), wb.save())}>Terminal</button>
+        <button role="tab" aria-selected={tab === "terminal"} class:on={tab === "terminal"} title="A shell in your kernel's sandbox  (Ctrl+' or Ctrl+`)" onclick={() => ((wb.panelTab = "terminal"), wb.save())}>Terminal</button>
       {/if}
     </div>
     {#if tab === "terminal"}<span class="context">sandbox</span>{/if}

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { marked, parseSearch, rowMatches, type SearchCol } from "../web/src/lib/search";
+import { marked, parseSearch, rowMatches, type SearchCol, type Term } from "../web/src/lib/search";
 
 const cols = ["customer", "state", "total", "issued"];
 test("parse: columns, operators, negation, phrases; unknown names stay text", () => {
@@ -77,6 +77,20 @@ test("the kernel's search and the browser's find the same rows", async () => {
       const got = tableFromIPC((await s.filter("small", parseSearch(q, names))).arrow);
       const kernel = [...Array(got.numRows).keys()].map((i) => Number(got.getChild("id")!.get(i)));
       expect({ q, n: kernel.length, ids: kernel }).toEqual({ q, n: browser.length, ids: browser });
+    }
+    // the columns' filters (Table.svelte): a checklist of values, and ranges of numbers and dates
+    const FILTERS: Term[][] = [
+      [{ col: "region", op: "in", value: "", values: ["north", "EAST"], not: false }],
+      [{ col: "amount", op: ">=", value: "30", not: false }, { col: "amount", op: "<=", value: "45", not: false }],
+      [{ col: "day", op: ">=", value: "2025-01-20", not: false }, { col: "day", op: "<=", value: "2025-02-01", not: false }],
+      [{ col: "region", op: "in", value: "", values: ["south"], not: false }, { col: "amount", op: ">=", value: "60", not: false }],
+    ];
+    for (const terms of FILTERS) {
+      const browser = [...Array(all.numRows).keys()].filter((i) => rowMatches(terms, cols, i)).map((i) => Number(all.getChild("id")!.get(i)));
+      const got = tableFromIPC((await s.filter("small", terms)).arrow);
+      const kernel = [...Array(got.numRows).keys()].map((i) => Number(got.getChild("id")!.get(i)));
+      expect(browser.length).toBeGreaterThan(0);
+      expect({ terms, ids: kernel }).toEqual({ terms, ids: browser });
     }
   } finally {
     await s.close();

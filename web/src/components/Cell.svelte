@@ -211,7 +211,8 @@
           <button class="icon run" title="Run  ⇧↵" aria-label="Run" onclick={() => ctl.run([name])}><Icon name="play" size={13} /></button>
         {/if}
       {:else if isMd && ctl.mayEdit}
-        <button class="text" onclick={() => (editingMd ? (editingMd = false) : ctl.select(name, "edit"))}>{editingMd ? "Done" : "Edit"}</button>
+        <!-- (pressed without taking focus from the editor: its blur would close it first, and the click reopen it) -->
+        <button class="text" onpointerdown={(e) => e.preventDefault()} onclick={() => (editingMd ? (editingMd = false) : ctl.select(name, "edit"))}>{editingMd ? "Done" : "Edit"}</button>
       {/if}
       <Menu items={menu} />
     </span>

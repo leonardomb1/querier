@@ -88,9 +88,12 @@ export type ProviderConfig = LdapProviderConfig | OidcProviderConfig;
 export interface AuthConfig {
   providers: ProviderConfig[];
   session: { absoluteHours: number; idleMinutes: number; refreshMinutes: number };
+  /** public links to reports (reports.ts): off unless an administrator turns them on; `networks`, when
+   *  set, is where every link may be opened from at most (a link can narrow it, never widen it) */
+  publicLinks?: { enabled: boolean; networks?: string[] };
 }
 
-const DEFAULTS: AuthConfig = { providers: [], session: { absoluteHours: 12, idleMinutes: 120, refreshMinutes: 15 } };
+const DEFAULTS: AuthConfig = { providers: [], session: { absoluteHours: 12, idleMinutes: 120, refreshMinutes: 15 }, publicLinks: { enabled: false } };
 
 export const authFile = () => process.env.QUERIER_AUTH_CONFIG ?? join(configDir, "auth.json");
 
@@ -98,7 +101,7 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
   const f = Bun.file(authFile());
   if (!(await f.exists())) return structuredClone(DEFAULTS);
   const raw = (await f.json()) as Partial<AuthConfig>;
-  return { providers: raw.providers ?? [], session: { ...DEFAULTS.session, ...(raw.session ?? {}) } };
+  return { providers: raw.providers ?? [], session: { ...DEFAULTS.session, ...(raw.session ?? {}) }, publicLinks: { enabled: !!raw.publicLinks?.enabled, ...(raw.publicLinks?.networks?.length ? { networks: raw.publicLinks.networks } : {}) } };
 }
 
 export async function saveAuthConfig(c: AuthConfig) {

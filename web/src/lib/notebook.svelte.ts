@@ -124,8 +124,10 @@ export class NotebookCtl {
     initial?: Notebook,
     /** the published report, as its viewers see it: its frozen cells, run in their report kernel */
     readonly reportMode = false,
+    /** a public link's page: no socket and no kernel, its last run given (conn.feed) */
+    readonly offline = false,
   ) {
-    this.conn = new NotebookConn(name, () => this.refresh(), reportMode);
+    this.conn = new NotebookConn(name, () => this.refresh(), reportMode, offline);
     this.conn.onnotice = (m) => this.say(m);
     this.params = stored(`querier:params:${name}`, {});
     this.folds = stored(`querier:folds:${name}`, {});

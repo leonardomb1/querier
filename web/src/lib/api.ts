@@ -26,6 +26,22 @@ export interface PublishedInfo {
   changed?: boolean;
   /** when the scheduled run viewers see was made */
   snapshotAt?: number;
+  /** its public link (for who may make one): null when it has none */
+  public?: PublicLinkInfo | null;
+  /** whether the server allows public links, and the networks they must stay within */
+  publicAllowed?: { enabled: boolean; networks: string[] };
+}
+
+/** A public link to a published report, as its editors see it (the passcode as whether there is one). */
+export interface PublicLinkInfo {
+  token: string;
+  path: string;
+  refresh: number;
+  networks: string[];
+  expires: number | null;
+  passcode: boolean;
+  embed: "none" | "any" | string[];
+  createdAt: number;
 }
 
 export interface ParamDecl {
@@ -85,6 +101,7 @@ export type Action =
   | "notebook.delete"
   | "notebook.share"
   | "report.view"
+  | "report.publishPublic"
   | "git.pull"
   | "git.push"
   | "sandbox.manage"
@@ -457,6 +474,8 @@ export interface AuthSettings {
   /** who may sign in: a condition over their groups and attributes (null: everyone the directories accept);
    *  `custom`: sign-in.cedar was edited as a policy file, not in this shape */
   admission: { when: string | null; custom?: boolean };
+  /** public links to reports: allowed at all, and the networks every link must stay within */
+  publicLinks: { enabled: boolean; networks?: string[] };
 }
 export interface ProviderTest {
   steps: { ok: boolean; what: string; detail?: string; ms?: number }[];
@@ -611,6 +630,11 @@ export const api = {
     publish: (nb: string, o: { runAs: "viewer" | "owner"; bindings?: Record<string, string>; schedule?: { every: number } | null }) =>
       call<{ at: number }>("POST", `${nbPath(nb)}/published`, o),
     unpublish: (nb: string) => call("DELETE", `${nbPath(nb)}/published`),
+    /** its public link, made or changed: the passcode typed anew, left as it is (undefined), or taken off (null) */
+    setPublic: (nb: string, o: { refresh: number; networks: string[]; expires: string | null; passcode?: string | null; embed: "none" | "any" | string[] }) =>
+      call<PublicLinkInfo>("PUT", `${nbPath(nb)}/published/public`, o),
+    removePublic: (nb: string) => call("DELETE", `${nbPath(nb)}/published/public`),
+    rotatePublic: (nb: string) => call<PublicLinkInfo>("POST", `${nbPath(nb)}/published/public/token`),
   },
   /** the admin console (admin.manage) */
   admin: {
@@ -630,6 +654,7 @@ export const api = {
       order: (ids: string[]) => call("PUT", "/admin/auth/order", { ids }),
       session: (s: AuthSettings["session"]) => call<AuthSettings["session"]>("PUT", "/admin/auth/session", s),
       admission: (when: string | null) => call<AuthSettings["admission"]>("PUT", "/admin/auth/admission", { when }),
+      publicLinks: (o: { enabled: boolean; networks: string[] }) => call<AuthSettings["publicLinks"]>("PUT", "/admin/auth/public", o),
       /** a certificate read on the server (PEM text, or a DER file's bytes in base64): checked, and what it is */
       certificate: (given: { pem: string } | { der: string }) => call<{ pem: string; certs: CertificateInfo[] }>("POST", "/admin/auth/certificate", given),
     },

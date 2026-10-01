@@ -21,6 +21,10 @@ const RAW: Record<string, string> = {
   "/api/workspaces/:ws/notebooks/:nb/cells/:cell/export": "signed in, notebook.run",
   "/mcp": "a client token; each tool checks its owner and the AI level",
   "/ws/:ws/:nb": "signed in, notebook.view; each message checked (SOCKET_NEEDS)",
+  "/p/:token": "public: a public link's page (enabled, network, expiry; the page asks for its passcode)",
+  "/api/public/:token": "public: a public link's report (enabled, network, expiry, passcode), no code",
+  "/api/public/:token/unlock": "public: a public link's passcode (throttled)",
+  "/api/public/:token/outputs": "public: a public link's last run (enabled, network, expiry, passcode)",
   "/ws/:ws/:nb/collab": "signed in, notebook.view and readCode; edits only with notebook.edit, rechecked (collab.ts)",
   "/ws/:ws/:nb/report": "signed in, report.view, published; each message checked (REPORT_SOCKET_NEEDS)",
 };

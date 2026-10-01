@@ -239,3 +239,83 @@ test("environments: a Member applies packages; kernels import them; a published 
   const no = (await tpl(`<script>import pad from "left-pad";</script><p>{pad("x", 3)}</p>`)).body;
   expect(no.error.message).toContain('not "left-pad"');
 }, 240_000);
+
+test("public links: off until an admin allows them; networks, passcode, expiry; the owner's last run served, no code", async () => {
+  const anon = (path: string, init: RequestInit = {}) => fetch(`http://localhost:${PORT}${path}`, init);
+  const link = (who: string, body: object) => api(who, "PUT", "/workspaces/w/notebooks/r/published/public", body);
+  expect((await api("ana", "POST", "/workspaces/w/notebooks/r/published", { runAs: "owner" })).status).toBe(200);
+
+  // off until an administrator turns them on, within networks every link must stay in
+  expect((await link("ana", { refresh: 5 })).status).toBe(400);
+  expect((await api("ana", "PUT", "/admin/auth/public", { enabled: true })).status).toBe(403);
+  expect((await api("root", "PUT", "/admin/auth/public", { enabled: true, networks: ["127.0.0.0/8", "::1/128", "10.0.0.0/8"] })).status).toBe(200);
+  expect((await link("vic", { refresh: 5 })).status).toBe(403); // a Viewer doesn't make links
+  expect((await link("ana", { refresh: 5, networks: ["192.168.0.0/16"] })).status).toBe(400); // outside the server's
+  expect((await link("ana", { refresh: 5, embed: ["not a site"] })).status).toBe(400);
+
+  const made = (await link("ana", { refresh: 5, passcode: "sesame-123" })).body;
+  expect(made).toMatchObject({ refresh: 5, passcode: true, embed: "none" });
+  const token = made.token as string;
+  expect(made.path).toBe(`/p/${token}`);
+  expect((await api("ana", "GET", "/workspaces/w/notebooks/r/published")).body.published.public.token).toBe(token);
+  expect((await api("vic", "GET", "/workspaces/w/notebooks/r/published")).body.published.public).toBeUndefined();
+
+  // the passcode first; a wrong one refused
+  expect((await anon(`/api/public/${token}`)).status).toBe(401);
+  expect((await anon(`/api/public/${token}/unlock`, { method: "POST", body: JSON.stringify({ passcode: "wrong" }) })).status).toBe(401);
+  const unlocked = await anon(`/api/public/${token}/unlock`, { method: "POST", body: JSON.stringify({ passcode: "sesame-123" }) });
+  const cookie = /querier_public_[^=;]+=[^;]+/.exec(unlocked.headers.get("set-cookie") ?? "")![0];
+  const meta = await (await anon(`/api/public/${token}`, { headers: { cookie } })).json();
+  expect(meta.cells.find((c: any) => c.name === "tok").source).toBe(""); // no code
+  expect(meta.cells.find((c: any) => c.name === "tok").hash).toBeTruthy();
+  expect(meta.params).toEqual([]); // nobody sets PARAMs: their defaults
+
+  // the first visit starts a run as the owner; then it is served, refreshed when older than the link says
+  let out = await anon(`/api/public/${token}/outputs`, { headers: { cookie } });
+  for (let i = 0; i < 200 && out.status === 202; i++) (await Bun.sleep(200), (out = await anon(`/api/public/${token}/outputs`, { headers: { cookie } })));
+  expect(out.status).toBe(200);
+  const buf = new Uint8Array(await out.arrayBuffer());
+  const frames: any[] = [];
+  for (let at = 0; at < buf.length; ) {
+    const view = new DataView(buf.buffer, buf.byteOffset + at);
+    const n = view.getUint32(0);
+    frames.push(JSON.parse(new TextDecoder().decode(buf.subarray(at + 4, at + 4 + n))));
+    at += 8 + n + view.getUint32(4 + n);
+  }
+  expect(frames.at(-1).type).toBe("replayed");
+  expect(frames.some((f) => f.type === "event" && f.cell === "tok" && f.event.text?.includes("token length 16"))).toBe(true); // ana's token
+  expect(frames.some((f) => f.event?.traceback)).toBe(false);
+
+  // the page: not framed by other sites, its address not passed on (when the UI is built)
+  const page = await anon(`/p/${token}`);
+  if (page.status === 200) {
+    expect(page.headers.get("content-security-policy")).toBe("frame-ancestors 'self'");
+    expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+  }
+
+  // a network it isn't opened from; an embedder; then an expiry that passes
+  expect((await link("ana", { refresh: 5, networks: ["10.0.0.0/8"] })).status).toBe(200);
+  expect((await anon(`/api/public/${token}`, { headers: { cookie } })).status).toBe(403);
+  expect((await anon(`/p/${token}`)).status).toBe(403);
+  expect((await link("ana", { refresh: 5, embed: ["https://intranet.example.com"] })).body.embed).toEqual(["https://intranet.example.com"]);
+  expect((await link("ana", { refresh: 5, expires: Date.now() - 1000 })).status).toBe(400);
+  expect((await link("ana", { refresh: 5, expires: Date.now() + 800 })).status).toBe(200);
+  await Bun.sleep(1000);
+  expect((await anon(`/api/public/${token}`, { headers: { cookie } })).status).toBe(410);
+
+  // a new address: the old one is gone; the passcode kept
+  expect((await link("ana", { refresh: 5 })).body.passcode).toBe(true);
+  const rotated = (await api("ana", "POST", "/workspaces/w/notebooks/r/published/public/token")).body.token as string;
+  expect(rotated).not.toBe(token);
+  expect((await anon(`/api/public/${token}`, { headers: { cookie } })).status).toBe(404);
+  expect((await anon(`/api/public/${rotated}`)).status).toBe(401);
+
+  // off again, server-wide: every link is gone from the outside
+  expect((await api("root", "PUT", "/admin/auth/public", { enabled: false })).status).toBe(200);
+  expect((await anon(`/api/public/${rotated}`)).status).toBe(404);
+  expect((await api("root", "PUT", "/admin/auth/public", { enabled: true })).status).toBe(200);
+  // published to run as each viewer: it can't be public, the link goes
+  expect((await api("ana", "POST", "/workspaces/w/notebooks/r/published", { runAs: "viewer" })).status).toBe(200);
+  expect((await api("ana", "GET", "/workspaces/w/notebooks/r/published")).body.published.public).toBeNull();
+  expect((await api("root", "GET", "/admin/audit?action=report.public")).body.entries.length).toBeGreaterThan(3);
+}, 120_000);

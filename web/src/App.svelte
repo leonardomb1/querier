@@ -5,6 +5,7 @@
   import Workbench from "./components/wb/Workbench.svelte";
   import Home from "./components/home/Home.svelte";
   import ReportPage from "./components/ReportPage.svelte";
+  import PublicReport from "./components/PublicReport.svelte";
   import Spinner from "./components/Spinner.svelte";
   import Dialogs from "./components/ui/Dialogs.svelte";
   import PasswordDialog from "./components/auth/PasswordDialog.svelte";
@@ -43,6 +44,8 @@
           <Workbench name={route.name} initial={route.book} />
         {:else if route.page === "view"}
           <ReportPage name={route.name} book={route.book} />
+        {:else if route.page === "public"}
+          <PublicReport token={route.token} />
         {:else if route.page === "report"}
           <Workbench name={route.name} initial={route.book} open="report" />
         {:else}

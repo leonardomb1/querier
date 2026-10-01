@@ -37,6 +37,8 @@ export const ACTIONS = {
   "notebook.delete": ["Notebook"],
   "notebook.share": ["Notebook"],
   "report.view": ["Notebook"],
+  // a link to its published report that anyone may open, without signing in (when administrators allow them)
+  "report.publishPublic": ["Notebook"],
   "git.pull": ["Notebook"],
   "git.push": ["Notebook"],
   "sandbox.manage": ["Workspace", "Notebook"],
@@ -55,7 +57,7 @@ export const ALL_ACTIONS = Object.keys(ACTIONS) as Action[];
 
 const VIEWER: Action[] = ["workspace.view", "notebook.view", "notebook.readCode", "report.view"];
 const CONTRIBUTOR: Action[] = [...VIEWER, "notebook.create", "notebook.run", "notebook.shell", "notebook.edit", "notebook.delete", "git.pull", "git.push", "connection.use"];
-const MEMBER: Action[] = [...CONTRIBUTOR, "notebook.share", "sandbox.manage", "environment.manage", "connection.manage", "ai.configure", "workspace.manageAccess"];
+const MEMBER: Action[] = [...CONTRIBUTOR, "notebook.share", "report.publishPublic", "sandbox.manage", "environment.manage", "connection.manage", "ai.configure", "workspace.manageAccess"];
 const ADMIN: Action[] = [...MEMBER, "workspace.manage"];
 export const WORKSPACE_ROLES = { Admin: ADMIN, Member: MEMBER, Contributor: CONTRIBUTOR, Viewer: VIEWER } as const;
 export type WorkspaceRole = keyof typeof WORKSPACE_ROLES;

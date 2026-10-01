@@ -7,6 +7,7 @@
   import type { NotebookCtl } from "../lib/notebook.svelte";
   import { session } from "../lib/session.svelte";
   import Icon from "./Icon.svelte";
+  import PublicLinkSection from "./PublicLinkSection.svelte";
   import InfoTip from "./ui/InfoTip.svelte";
   import Select from "./ui/Select.svelte";
   import OverlayPanel from "./wb/OverlayPanel.svelte";
@@ -147,6 +148,9 @@
         {/if}
       </span>
     </div>
+
+    <!-- its public link: for who may make one (report.publishPublic), once published -->
+    {#if pub && pub.public !== undefined}<PublicLinkSection {ctl} {pub} />{/if}
 
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <footer>

@@ -43,6 +43,27 @@ export interface Published {
   version: string;
   /** the environments applied when it was published (environments.ts): what it runs and bundles with, whatever changes after */
   envs?: { wsPython?: string; nbPython?: string; wsJs?: string; nbJs?: string };
+  /** a link anyone may open without signing in (when administrators allow them) */
+  public?: PublicLink;
+}
+
+/** A public link: what it serves is the report's last run as its owner, refreshed when older than
+ *  `refresh` minutes. Its PARAMs keep their defaults (nobody sets them), and no code is sent. */
+export interface PublicLink {
+  /** the link's secret (/p/<token>): a new one ends the old link */
+  token: string;
+  createdBy: string;
+  createdAt: number;
+  /** minutes a run's results are served before a visit runs it again */
+  refresh: number;
+  /** where it may be opened from (within the server's own list, when it has one) */
+  networks?: string[];
+  /** epoch ms: gone after */
+  expires?: number;
+  /** a passcode viewers type once (its hash); bumped when it changes, so earlier unlocks end */
+  passcode?: { hash: string; version: number };
+  /** who may show it in a frame: nobody else (the default), anyone, or these origins */
+  embed: "none" | "any" | string[];
 }
 
 /** A version for what a report shows: its cells' sources, its layout and template. */
@@ -60,6 +81,13 @@ export class Reports {
 
   all(): [string, Published][] {
     return (this.db.query("SELECT id, data FROM reports").all() as { id: string; data: string }[]).map((r) => [r.id, JSON.parse(r.data)]);
+  }
+
+  /** The published report a public link's token opens, if any. */
+  byToken(token: string): [string, Published] | null {
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) return null;
+    for (const [nb, p] of this.all()) if (p.public?.token === token) return [nb, p];
+    return null;
   }
 
   set(nb: string, p: Published) {

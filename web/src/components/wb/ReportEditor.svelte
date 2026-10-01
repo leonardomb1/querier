@@ -187,7 +187,8 @@
   let settledCode = codeNow();
   let runTimer: ReturnType<typeof setTimeout>;
   $effect(() => {
-    if (!ctl.conn.synced || !ctl.book) return;
+    // nothing to run here (a public link's page: its last run is given)
+    if (!ctl.conn.synced || !ctl.book || !ctl.mayRun) return;
     const code = codeNow();
     const due = targets.filter((c) => ctl.fresh[c] !== "fresh" && !isBusy(c) && attempted.get(c) !== keyOf(c));
     clearTimeout(runTimer);
@@ -220,7 +221,7 @@
   $effect(() => {
     const ms = INTERVALS.find(([k]) => k === report.refresh)?.[1];
     if (!ms) return;
-    const t = setInterval(() => document.visibilityState === "visible" && !busy && refresh(), ms);
+    const t = setInterval(() => document.visibilityState === "visible" && !busy && ctl.mayRun && refresh(), ms);
     return () => clearInterval(t);
   });
   let updatedAt = $state<number | null>(null);
@@ -314,8 +315,9 @@
       {/if}
       {#if ctl.reportMode && ctl.book.published?.snapshotAt && !busy}
         <span class="note" title="Run by the server on a schedule, as {ctl.book.published.owner}">Updated {ago(ctl.book.published.snapshotAt)}</span>
-      {:else if updated && !busy}<span class="note">{updated}</span>{/if}
-      <Select
+      {:else if updated && !busy && !ctl.offline}<span class="note">{updated}</span>{/if}
+      <!-- (a public link's page: the server refreshes it, as its link says) -->
+      {#if !ctl.offline}<Select
         class="refresh"
         compact
         value={report.refresh ?? ""}
@@ -324,7 +326,7 @@
         disabled={!ctl.mayEdit}
         options={[{ value: "", label: "Auto-refresh off" }, ...INTERVALS.map(([k]) => ({ value: k, label: `Every ${k}` }))]}
         onchange={(v) => ctl.setReport((r) => (v ? (r.refresh = v) : delete r.refresh))}
-      />
+      />{/if}
       {#if kiosk}
         <button class="icon" title="Leave full screen (Esc)" aria-label="Leave full screen" onclick={toggleKiosk}><Icon name="shrink" /></button>
       {/if}
@@ -455,8 +457,8 @@
               {run}
               cell={b.cell}
               show={b.parts}
-              exportUrl={exportUrl(b.cell)}
-              onsearch={(terms) => ctl.conn.filter(b.cell!, terms)}
+              exportUrl={ctl.offline ? undefined : exportUrl(b.cell)}
+              onsearch={ctl.offline ? undefined : (terms) => ctl.conn.filter(b.cell!, terms)}
               params={paramNames}
               {onparam}
               onstop={() => ctl.interrupt()}

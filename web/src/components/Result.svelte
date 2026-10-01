@@ -55,14 +55,21 @@
   let matches = $state(0);
 
   // the page holds a preview; a search of a longer result asks the kernel for every match
-  const terms = $derived(parseSearch(query, out.columns.map((c) => c.name)));
+  // the columns' own filters (Table.svelte's), as terms: with the search box's, over the page's rows and,
+  // for a longer result, the kernel's whole one. One for a column this result hasn't is dropped.
+  let filters = $state<Record<string, Term[]>>({});
+  const activeFilters = $derived(Object.fromEntries(Object.entries(filters).filter(([c, t]) => t.length && out.columns.some((x) => x.name === c))));
+  const filterCount = $derived(Object.keys(activeFilters).length);
+  const terms = $derived([...parseSearch(query, out.columns.map((c) => c.name)), ...Object.values(activeFilters).flat()]);
   let full = $state<{ table: ReturnType<typeof arrowTable>; rows: number; of: number; truncated: boolean } | null>(null);
   let fullError = $state("");
   let asking = $state(false);
   // one search at the kernel at a time: asked for another meanwhile, only the latest goes next
   let inFlight = false;
-  let next: { terms: Term[]; asked: string } | null = null;
-  async function ask(t: Term[], asked: string) {
+  let next: { terms: Term[]; asked: number } | null = null;
+  // each change of what is searched for: only the answer to the latest is shown
+  let asking_ = 0;
+  async function ask(t: Term[], asked: number) {
     if (inFlight) return void (next = { terms: t, asked });
     inFlight = true;
     const r = await onsearch!(t).catch((e) => ({ rows: 0, of: 0, truncated: false, error: e.message }) as Found);
@@ -72,7 +79,7 @@
       next = null;
       return ask(n.terms, n.asked);
     }
-    if (asked !== query) return; // cleared, or changed to what needs no search
+    if (asked !== asking_) return; // cleared, or changed since
     asking = false;
     fullError = r.error ?? "";
     full = r.error || !r.arrow ? null : { table: arrowTable(r.arrow), rows: r.rows, of: r.of, truncated: r.truncated };
@@ -80,6 +87,7 @@
   $effect(() => {
     const t = terms;
     void out;
+    const asked = ++asking_;
     if (!onsearch || !out.truncated || !t.length) {
       next = null;
       full = null;
@@ -88,7 +96,7 @@
       return;
     }
     asking = true;
-    ask(t, query);
+    ask(t, asked);
   });
   const shown = $derived(full?.table ?? table);
 
@@ -112,6 +120,8 @@
   /** each term as it was understood: which column, which comparison */
   const readAs = $derived(terms.map((t) => `${t.not ? "not " : ""}${t.col ?? "any column"} ${OPS[t.op]} ${t.value}`));
   const count = $derived(typed ? (typed !== query ? null : full ? full.rows : asking ? null : matches) : null);
+  /** the rows the filters (and search) leave, for the bar */
+  const filteredCount = $derived(filterCount ? (full ? full.rows : asking ? null : matches) : null);
   const EXAMPLES: [string, string][] = [
     ["000600", "any column contains it"],
     ["customer:000600", "that column contains it"],
@@ -130,6 +140,12 @@
       {fmt.format(out.rows)}{out.capped ? "+" : ""} rows × {out.columns.length}
       {#if out.capped}<span class="warn" title="basalt stopped the query at the row cap; later cells see only these rows">capped</span>{/if}
       {#if out.truncated}<span class="muted">· first {fmt.format(table.numRows)} here</span>{/if}
+      {#if filterCount}
+        <span class="filtered" title={Object.keys(activeFilters).join(", ")}>
+          <Icon name="filter-filled" size={12} />{filteredCount == null ? "…" : fmt.format(filteredCount)} filtered by {Object.keys(activeFilters).length === 1 ? Object.keys(activeFilters)[0] : `${filterCount} columns`}
+          <button class="link" onclick={() => (filters = {})}>Clear</button>
+        </span>
+      {/if}
       {#if query && full}
         <span class="muted">· <b class="found">{fmt.format(full.rows)}</b> match{full.rows === 1 ? "" : "es"} in all {fmt.format(full.of)} rows{full.truncated ? `, first ${fmt.format(full.table.numRows)} here` : ""}</span>
       {:else if query && asking}
@@ -203,10 +219,30 @@
       {/if}
     </span>
   </div>
-  <Table table={shown} {query} onmatches={(n) => (matches = n)} />
+  <Table
+    table={shown}
+    {terms}
+    filters={activeFilters}
+    onfilter={(col, t) => (filters = { ...filters, [col]: t })}
+    partial={out.truncated && !full}
+    onmatches={(n) => (matches = n)}
+  />
 </div>
 
 <style>
+  .filtered {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    margin-left: 0.375rem;
+    color: var(--accent);
+  }
+  .filtered .link {
+    padding: 0;
+    font-size: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+  }
   .result {
     display: flex;
     flex-direction: column;

@@ -51,13 +51,18 @@
     display: flex;
     color: var(--wb-fg-dim);
   }
+  /* every crumb the same box, the current one too: the same space either side of each chevron */
   .here {
+    display: block;
+    padding: 0 0.25rem;
+    line-height: 1.375rem;
     color: var(--wb-fg);
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .crumbs a {
     display: inline-flex;
+    line-height: 1.375rem;
     padding: 0 0.25rem;
     border-radius: 4px;
     align-items: center;

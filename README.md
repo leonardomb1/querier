@@ -206,6 +206,25 @@ run, without a kernel of their own until they change a control. Viewers' runs
 write nothing back to the notebook's folder. Publishing, unpublishing and each
 scheduled run are in the audit log.
 
+**Public links** (Publish → Public link): a published report anyone may open at
+`/p/<link>`, without signing in, for a report run as its owner with nothing bound.
+They are off until an administrator turns them on (Administration → Sign-in →
+Public links), optionally only from given networks that every link must stay
+within; then a workspace's Admins and Members may make them (`report.publishPublic`,
+which a policy can narrow).
+- What it serves is the report's **last run as its owner**, refreshed when a visit
+  finds it older than the link says (5 minutes to a day) or on the report's
+  schedule; anonymous visitors never start a kernel of their own. Its PARAMs keep
+  their defaults and it has no controls: filter in the report itself (a template
+  can filter its cells' rows in the browser). No code is sent, nor tracebacks.
+- Each link can be **narrowed to networks** (10.0.0.0/8, an address), **end on a
+  date**, ask a **passcode** (typed once; tries are throttled), and be **shown in
+  other sites' frames** or not (none by default, any, or listed sites). Every
+  request is checked against them, and the address isn't passed on or indexed.
+- **New address** ends the old link and keeps its settings; removing it, turning
+  public links off, or publishing it to run as each viewer ends it too. Making,
+  changing and ending links are in the audit log.
+
 **Git**: each notebook can be its own repository; opening an untracked notebook
 offers to start. The sidebar's Changes tab shows what changed per cell (a
 renumbered cell is "moved", not deleted and added), commits, discards, switches

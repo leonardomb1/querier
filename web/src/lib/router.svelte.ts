@@ -15,6 +15,8 @@ export type Route =
   /** a published report, as its viewers get it */
   | { page: "view"; name: string; book: Notebook }
   | { page: "login"; providers: SignIn[]; next: string; error: string; insecure: boolean }
+  /** a public link's report (/p/<token>): nobody signs in */
+  | { page: "public"; token: string }
   | { page: "error"; status: number; title: string; message: string; retry: boolean };
 
 function failure(e: unknown, what: string): Route {
@@ -27,6 +29,9 @@ function failure(e: unknown, what: string): Route {
 }
 
 async function load(hash: string): Promise<Route | null> {
+  // a public link is its own address, not a route of the app: no session, no sign-in
+  const pub = /^\/p\/([A-Za-z0-9_-]+)\/?$/.exec(location.pathname);
+  if (pub) return { page: "public", token: pub[1] };
   const where = parse(hash);
   if (!where) return { page: "error", status: 404, title: "Nothing here", message: `No page at ${hash}.`, retry: false };
   if (where.page === "legacy") {

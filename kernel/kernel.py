@@ -222,7 +222,13 @@ def search_expr(df, terms):
         cols = [t["col"]] if t.get("col") in df.columns else searchable
         want, op = str(t.get("value", "")), t.get("op", "has")
         low = want.lower()
-        if op == "has":
+        if op == "in":
+            # a column filter's checklist: any of these values; None for the empty cells
+            vals = t.get("values") or []
+            listed = [str(v).lower() for v in vals if v is not None]
+            nulls = any(v is None for v in vals)
+            e = pl.any_horizontal([(text(c).is_in(listed).fill_null(False) | (pl.col(c).is_null() if nulls else pl.lit(False))) for c in cols])
+        elif op == "has":
             e = pl.any_horizontal([text(c).str.contains(low, literal=True).fill_null(False) for c in cols])
         elif op in ("=", "!="):
             eq = pl.any_horizontal([(text(c) == low).fill_null(False) for c in cols])

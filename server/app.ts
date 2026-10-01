@@ -30,7 +30,11 @@ import { Kernels } from "./kernels";
 import { reportVersion, Reports, type Published, type RunAs } from "./reports";
 import { Environments, type EnvKind } from "./environments";
 import { hash } from "../shared/hash";
-import { allowInsecureLogin, authFile, clientAddress, publicUrl, readCertificates, type ProviderConfig } from "./auth/config";
+import { analyze, type Deps } from "./analyze";
+import { LoginLimiter } from "./auth/limits";
+import { inNetworks, parseNetwork, withinNetworks } from "./networks";
+import type { PublicLink } from "./reports";
+import { allowInsecureLogin, authFile, clientAddress, publicUrl, readCertificates, secureCookies, type ProviderConfig } from "./auth/config";
 
 const arg = (flag: string, fallback: string) => {
   const i = process.argv.indexOf(flag);
@@ -285,6 +289,57 @@ async function runScheduled(nb: string) {
 // after a start, not all at once
 reports.all().forEach(([nb], i) => schedule(nb, 1000 + i * 3000));
 
+// -- public links (reports.ts PublicLink): a published report anyone may open, without signing in, when
+// administrators allow them. What it serves is the report's last run as its owner, refreshed when older
+// than the link says; its PARAMs keep their defaults, and no code leaves the server. Every request is
+// checked: the link's and the server's networks, its expiry, its passcode.
+const publicLimiter = new LoginLimiter();
+const publicCookie = (token: string) => `querier_public_${token.slice(0, 12)}`;
+/** A public link's report, if this request may have it; else the answer to give. */
+async function publicAccess(req: Request, ip: string, token: string, passcode = true): Promise<{ nb: string; p: Published & { public: PublicLink } } | Response> {
+  const gone = () => Response.json({ error: "There's no such report." }, { status: 404 });
+  const tenant = auth.config.publicLinks;
+  if (!tenant?.enabled) return gone();
+  const found = reports.byToken(token);
+  if (!found || !found[1].public || !canSchedule(found[1])) return gone();
+  const [nb, p] = found as [string, Published & { public: PublicLink }];
+  if (p.public.expires && p.public.expires < Date.now()) return Response.json({ error: "This link has expired." }, { status: 410 });
+  if (!inNetworks(ip, tenant.networks) || !inNetworks(ip, p.public.networks)) return Response.json({ error: "This report can't be opened from your network." }, { status: 403 });
+  if (passcode && p.public.passcode && !(await auth.signer.verify(`public:${token}:${p.public.passcode.version}`, cookieOf(req, publicCookie(token)))))
+    return Response.json({ error: "This report needs its passcode.", passcode: true }, { status: 401 });
+  return { nb, p };
+}
+/** What a public page may frame it: its link's say (this origin always). */
+const frameAncestors = (embed: PublicLink["embed"]) => (embed === "any" ? "*" : ["'self'", ...(Array.isArray(embed) ? embed : [])].join(" "));
+/** The dependencies of the published cells, for the layout: worked out once per version. */
+const publishedDeps = new Map<string, { version: string; deps: Promise<Record<string, Deps>> }>();
+function depsOf(nb: string, p: Published) {
+  const known = publishedDeps.get(nb);
+  if (known?.version === p.version) return known.deps;
+  const deps = analyze(p.cells as any).catch(() => ({}));
+  publishedDeps.set(nb, { version: p.version, deps });
+  return deps;
+}
+/** The report's last run as frames (what a report socket replays), without tracebacks: no code goes out. */
+async function publicFrames(nb: string, p: Published, outputs: Map<string, CellOutput>): Promise<Uint8Array> {
+  const frames: Uint8Array[] = [encodeFrame({ type: "deps", deps: await depsOf(nb, p) })];
+  for (const [cell, out] of outputs) {
+    frames.push(encodeFrame({ type: "state", cell, state: out.state, ms: out.ms, ran: out.ran }));
+    for (const ev of out.events) {
+      const meta = ev.meta as any;
+      const event = meta.event?.type === "error" ? { type: "error", message: meta.event.message } : meta.event;
+      frames.push(encodeFrame({ ...meta, event }, ev.data));
+    }
+  }
+  frames.push(encodeFrame({ type: "replayed" }));
+  const out = new Uint8Array(frames.reduce((n, f) => n + f.length, 0));
+  let at = 0;
+  for (const f of frames) (out.set(f, at), (at += f.length));
+  return out;
+}
+/** A public link's settings as its editors see them: the passcode as whether there is one. */
+const showPublic = (l: PublicLink) => ({ token: l.token, path: `/p/${l.token}`, refresh: l.refresh, networks: l.networks ?? [], expires: l.expires ?? null, passcode: !!l.passcode, embed: l.embed, createdAt: l.createdAt });
+
 // kernels nobody has used for a while stop (unless the limit is 0); hosts with no tab and no kernel go
 setInterval(
   async () => {
@@ -411,6 +466,7 @@ const WORDS: Partial<Record<Action, string>> = {
   "notebook.view": "see this notebook",
   "notebook.readCode": "read this notebook's code",
   "notebook.run": "run this notebook",
+  "report.publishPublic": "make this report public",
   "notebook.shell": "open a terminal in this notebook's kernel",
   "notebook.edit": "edit this notebook",
   "notebook.delete": "delete this notebook",
@@ -969,6 +1025,10 @@ const server = Bun.serve<Client["data"], any>({
           schedule: pub.schedule,
           // the live notebook has moved on since: its viewers still get what was published
           changed: pub.version !== reportVersion(book),
+          // its public link, for who may make one; and whether the server allows them
+          ...(permissions.includes("report.publishPublic")
+            ? { public: pub.public ? showPublic(pub.public) : null, publicAllowed: { enabled: !!auth.config.publicLinks?.enabled, networks: auth.config.publicLinks?.networks ?? [] } }
+            : {}),
         };
         if (permissions.includes("notebook.readCode")) return { ...book, permissions, published };
         // seen, not read: its cells without their code
@@ -1105,6 +1165,9 @@ const server = Bun.serve<Client["data"], any>({
             owner: p.owner && (names[p.owner] ?? p.owner),
             schedule: p.schedule,
             snapshotAt: snap && canSchedule(p) ? snap.at : undefined,
+            ...(permissions.includes("report.publishPublic")
+              ? { public: p.public ? showPublic(p.public) : null, publicAllowed: { enabled: !!auth.config.publicLinks?.enabled, networks: auth.config.publicLinks?.networks ?? [] } }
+              : {}),
           },
         };
       }),
@@ -1147,6 +1210,10 @@ const server = Bun.serve<Client["data"], any>({
           version: reportVersion(book),
           envs: envHashes(nb),
         };
+        // a public link stays through a new version, while the report can still be public
+        const was = reports.get(nb)?.public;
+        if (was && canSchedule(published)) published.public = was;
+        else if (was) auth.audit.log({ actor: who.id, action: "report.public.delete", resource: `Notebook:${nb}`, decision: "ok", detail: { why: "published to run as each viewer, or with bound PARAMs" } });
         reports.set(nb, published);
         snapshots.delete(nb);
         await closeReportHosts(nb, { type: "notebook" });
@@ -1162,6 +1229,74 @@ const server = Bun.serve<Client["data"], any>({
         await closeReportHosts(nb, { type: "gone" });
         auth.audit.log({ actor: r.session.principal.id, action: "report.unpublish", resource: `Notebook:${nb}`, decision: "ok" });
         changed(nb);
+      }),
+    },
+    // a public link to the published report: made or changed, ended, or given a new address
+    "/api/workspaces/:ws/notebooks/:nb/published/public": {
+      PUT: api({ on: "notebook", action: "report.publishPublic" }, async (r, b) => {
+        const nb = nbParam(r);
+        const tenant = auth.config.publicLinks;
+        if (!tenant?.enabled) throw new UserError("Public links are off on this server: an administrator turns them on (Administration → Sign-in).");
+        const p = reports.get(nb);
+        if (!p) throw new UserError("Publish the report first.");
+        if (!canSchedule(p)) throw new UserError("Only a report run as its owner, with no PARAM bound to its viewers, can be public: publish it that way first.");
+        const refresh = Number(b.refresh ?? 15);
+        if (!(refresh >= 1 && refresh <= 24 * 60)) throw new UserError("Refreshed every 1 minute to 24 hours.");
+        const networks: string[] = [];
+        for (const n of Array.isArray(b.networks) ? b.networks.map(String).map((x: string) => x.trim()).filter(Boolean) : []) {
+          try {
+            parseNetwork(n);
+          } catch (e: any) {
+            throw new UserError(e.message);
+          }
+          if (!withinNetworks(n, tenant.networks)) throw new UserError(`\`${n}\` isn't within the networks public links are allowed from (${tenant.networks!.join(", ")}).`);
+          networks.push(n);
+        }
+        const expires = b.expires == null || b.expires === "" ? undefined : Number(new Date(b.expires));
+        if (expires != null && !(expires > Date.now())) throw new UserError("An expiry in the future.");
+        const embed: PublicLink["embed"] = b.embed === "any" ? "any" : Array.isArray(b.embed) ? b.embed.map(String).map((o: string) => o.trim()).filter(Boolean) : "none";
+        for (const o of Array.isArray(embed) ? embed : []) if (!/^https?:\/\/[^\s/]+$/.test(o)) throw new UserError(`\`${o}\` isn't a site: https://example.com, as it shows in the address bar (no path).`);
+        const old = p.public;
+        // the passcode: typed anew, kept (undefined), or taken off (null)
+        let passcode = old?.passcode;
+        if (b.passcode === null) passcode = undefined;
+        else if (typeof b.passcode === "string" && b.passcode) {
+          if (b.passcode.length < 6) throw new UserError("A passcode of at least 6 characters.");
+          passcode = { hash: await Bun.password.hash(b.passcode), version: (old?.passcode?.version ?? 0) + 1 };
+        }
+        const link: PublicLink = {
+          token: old?.token ?? Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url"),
+          createdBy: old?.createdBy ?? r.session.principal.id,
+          createdAt: old?.createdAt ?? Date.now(),
+          refresh,
+          ...(networks.length ? { networks } : {}),
+          ...(expires ? { expires } : {}),
+          ...(passcode ? { passcode } : {}),
+          embed: Array.isArray(embed) && !embed.length ? "none" : embed,
+        };
+        reports.set(nb, { ...p, public: link });
+        auth.audit.log({ actor: r.session.principal.id, action: old ? "report.public.update" : "report.public.create", resource: `Notebook:${nb}`, decision: "ok", detail: { refresh, networks, expires, passcode: !!passcode, embed: link.embed } });
+        return showPublic(link);
+      }),
+      DELETE: api({ on: "notebook", action: "report.publishPublic" }, async (r) => {
+        const nb = nbParam(r);
+        const p = reports.get(nb);
+        if (!p?.public) return;
+        const { public: _, ...rest } = p;
+        reports.set(nb, rest);
+        auth.audit.log({ actor: r.session.principal.id, action: "report.public.delete", resource: `Notebook:${nb}`, decision: "ok" });
+      }),
+    },
+    // a new address: the old link stops working, the settings stay
+    "/api/workspaces/:ws/notebooks/:nb/published/public/token": {
+      POST: api({ on: "notebook", action: "report.publishPublic" }, async (r) => {
+        const nb = nbParam(r);
+        const p = reports.get(nb);
+        if (!p?.public) throw new NotFound("This report has no public link.");
+        const link = { ...p.public, token: Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url") };
+        reports.set(nb, { ...p, public: link });
+        auth.audit.log({ actor: r.session.principal.id, action: "report.public.rotate", resource: `Notebook:${nb}`, decision: "ok" });
+        return showPublic(link);
       }),
     },
     // the report as a Svelte template (server/template.ts): its source, and the bundle its frame runs
@@ -1520,8 +1655,27 @@ const server = Bun.serve<Client["data"], any>({
         sysadmin: auth.sysadmin.principal().username,
         // where its account lives: Querier's own (sysadmin.json, changed from the account menu), or .env's
         sysadminSource: auth.sysadmin.source,
+        publicLinks: auth.config.publicLinks ?? { enabled: false },
         admission: await admission(),
       })),
+    },
+    // public links to reports: on or off, and the networks every link must stay within
+    "/api/admin/auth/public": {
+      PUT: api({ on: "tenant", action: "admin.manage" }, async (r, b) => {
+        const networks: string[] = [];
+        for (const n of Array.isArray(b.networks) ? b.networks.map(String).map((x: string) => x.trim()).filter(Boolean) : []) {
+          try {
+            parseNetwork(n);
+          } catch (e: any) {
+            throw new UserError(e.message);
+          }
+          networks.push(n);
+        }
+        const publicLinks = { enabled: !!b.enabled, ...(networks.length ? { networks } : {}) };
+        await auth.saveConfig({ ...auth.config, publicLinks });
+        auth.audit.log({ actor: r.session.principal.id, action: "auth.publicLinks", resource: "Tenant:querier", decision: "ok", detail: publicLinks });
+        return publicLinks;
+      }),
     },
     // who may sign in: a condition over their groups and attributes (null: everyone the directories accept)
     "/api/admin/auth/admission": {
@@ -1726,6 +1880,96 @@ const server = Bun.serve<Client["data"], any>({
         return srv.upgrade(req, { data: { nb, sid: s.idHash, principal: s.principal, outputs: true, report: true } }) ? undefined : new Response("upgrade failed", { status: 400 });
       })();
     },
+    // -- public links: no session; every request checked (publicAccess)
+    "/p/:token": async (req, srv) => {
+      const a = await publicAccess(req, clientIp(req, srv), (req as any).params.token, false);
+      if (a instanceof Response) {
+        const { error } = (await a.json()) as { error: string };
+        return new Response(`<!doctype html><meta charset="utf-8"><title>Querier</title><p style="font:14px system-ui;margin:3rem;color:#555">${error}</p>`, {
+          status: a.status,
+          headers: { "Content-Type": "text/html; charset=utf-8", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" },
+        });
+      }
+      const index = Bun.file(join(dist, "index.html"));
+      if (!(await index.exists())) return new Response("UI not built", { status: 404 });
+      return new Response(index, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          // the address is the secret: it isn't passed on, indexed, or framed but where its link allows
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex, nofollow",
+          "Content-Security-Policy": `frame-ancestors ${frameAncestors(a.p.public.embed)}`,
+        },
+      });
+    },
+    "/api/public/:token": {
+      GET: async (req, srv) => {
+        const token = (req as any).params.token as string;
+        const a = await publicAccess(req, clientIp(req, srv), token);
+        if (a instanceof Response) return a;
+        const { nb, p } = a;
+        return Response.json(
+          {
+            name: nb,
+            workspace: nb.split("/")[0],
+            title: p.title,
+            description: p.description,
+            report: p.report,
+            template: p.template ?? undefined,
+            templateToken: p.template ? await auth.signer.sign(`template:published:${nb}`, 24 * 3600) : undefined,
+            templateVersion: p.template ? await templateVersion(p.template, await templatePackages(nb, p.envs ?? {})) : undefined,
+            // markdown is the report's prose; code isn't sent, only what tells a result is current
+            cells: p.cells.map((c) => ({ ...c, source: c.lang === "md" ? c.source : "", hash: hash(c.source) })),
+            params: [],
+            bound: [],
+            boundValues: {},
+            files: [],
+            permissions: [],
+            published: { at: p.publishedAt, runAs: "owner", public: { refresh: p.public.refresh } },
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      },
+    },
+    "/api/public/:token/unlock": {
+      POST: async (req, srv) => {
+        const token = (req as any).params.token as string;
+        const ip = clientIp(req, srv);
+        const a = await publicAccess(req, ip, token, false);
+        if (a instanceof Response) return a;
+        const pass = a.p.public.passcode;
+        if (!pass) return Response.json({ ok: true });
+        const key = `${ip}\u0000public\u0000${token}`;
+        const wait = publicLimiter.wait(key);
+        if (wait) return Response.json({ error: `Too many tries: again in ${Math.ceil(wait / 60_000)} minute${wait > 60_000 ? "s" : ""}.` }, { status: 429 });
+        const b = (await req.json().catch(() => ({}))) as { passcode?: string };
+        if (!(await Bun.password.verify(String(b.passcode ?? ""), pass.hash).catch(() => false))) {
+          publicLimiter.failed(key);
+          return Response.json({ error: "That isn't the passcode." }, { status: 401 });
+        }
+        publicLimiter.succeeded(key);
+        const signed = await auth.signer.sign(`public:${token}:${pass.version}`, 12 * 3600);
+        // framed by another site (and so a third-party cookie) only over https
+        const embedded = a.p.public.embed !== "none" && secureCookies;
+        const cookie = `${publicCookie(token)}=${signed}; Path=/; HttpOnly; Max-Age=${12 * 3600}; SameSite=${embedded ? "None" : "Lax"}${secureCookies ? "; Secure" : ""}`;
+        return Response.json({ ok: true }, { headers: { "Set-Cookie": cookie } });
+      },
+    },
+    // its last run, as report-socket frames; a run older than the link's refresh starts another (served meanwhile)
+    "/api/public/:token/outputs": {
+      GET: async (req, srv) => {
+        const a = await publicAccess(req, clientIp(req, srv), (req as any).params.token);
+        if (a instanceof Response) return a;
+        const { nb, p } = a;
+        const snap = snapshots.get(nb);
+        if (!snap || Date.now() - snap.at > p.public.refresh * 60_000) void runScheduled(nb);
+        if (!snap) return Response.json({ preparing: true }, { status: 202, headers: { "Cache-Control": "no-store" } });
+        return new Response((await publicFrames(nb, p, snap.outputs)) as Uint8Array<ArrayBuffer>, {
+          headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store", "X-Querier-Run-At": String(snap.at), "X-Querier-Refreshing": String(scheduling.has(nb)) },
+        });
+      },
+    },
     // editing together: anyone who may see the notebook is present; who may edit it changes it
     "/ws/:ws/:nb/collab": (req, srv) => {
       const nb = `${(req as any).params.ws}/${(req as any).params.nb}`;
@@ -1783,7 +2027,8 @@ const server = Bun.serve<Client["data"], any>({
         },
       });
     const index = Bun.file(join(dist, "index.html"));
-    if (await index.exists()) return new Response(index, { headers: { "Cache-Control": "no-cache" } });
+    // framed only by itself: only a public link may be shown by other sites (its own page, /p/:token)
+    if (await index.exists()) return new Response(index, { headers: { "Cache-Control": "no-cache", "Content-Security-Policy": "frame-ancestors 'self'" } });
     return new Response("UI not built: run `bun run build`, or `bun run dev` for the dev server", { status: 404 });
   },
 

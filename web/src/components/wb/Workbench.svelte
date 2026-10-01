@@ -118,8 +118,9 @@
     if (!mod) return;
     const k = e.key.toLowerCase();
     const act = (fn: () => void) => (e.preventDefault(), e.stopPropagation(), fn());
-    // Ctrl+`: the terminal, as VS Code's
-    if (e.key === "`" && ctl.may("notebook.shell")) return act(() => wb.togglePanel("terminal"));
+    // Ctrl+` (or Ctrl+', as VS Code on layouts where ` is a dead key: Brazilian ABNT2 and others): the terminal
+    const terminalKey = e.key === "`" || e.key === "'" || e.code === "Backquote" || (e.key === "Dead" && (e.code === "BracketLeft" || e.code === "Quote"));
+    if (terminalKey && !e.shiftKey && ctl.may("notebook.shell")) return act(() => wb.togglePanel("terminal"));
     // in a terminal, the keys are the shell's (Ctrl+K, Ctrl+B, Ctrl+E…), but for the palette and the panel
     if ((e.target as HTMLElement | null)?.closest?.(".xterm")) {
       if (e.shiftKey && k === "p") return act(() => (ctl.palette = !ctl.palette));
