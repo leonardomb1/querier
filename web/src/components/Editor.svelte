@@ -92,6 +92,7 @@
   let diff: import("monaco-editor/editor/editor.api").editor.IStandaloneDiffEditor | null = null;
   let plain: import("monaco-editor/editor/editor.api").editor.IStandaloneCodeEditor | null = null;
   const subs: { dispose(): void }[] = [];
+  const modelSubs: { dispose(): void }[] = [];
   let gitMarks: import("monaco-editor/editor/editor.api").editor.IEditorDecorationsCollection | null = null;
   let destroyed = false;
   /** the binding to the shared text, while edited together */
@@ -265,7 +266,9 @@
       M = await lib.loadMonaco();
       if (destroyed) return;
       model = M.editor.createModel(value, lib.LANG_ID[lang]);
-      subs.push({ dispose: lib.attachHooks(model, { lang, complete, hover, template: templateCompletion }) });
+      // the model's own: its completion and hover (lib/monaco.ts) and its change listener. Apart from `subs`,
+      // which go with the editor build() makes (again, for the inline diff): these last as long as the model
+      modelSubs.push({ dispose: lib.attachHooks(model, { lang, complete, hover, template: templateCompletion }) });
       const modelSub = model.onDidChangeContent(() => {
         const v = model!.getValue();
         // shared: the text goes to the room (cobind.ts), which tells the notebook; never saved from here
@@ -284,8 +287,7 @@
         const end = model.getFullModelRange().getEndPosition();
         editor!.setPosition(end);
       }
-      // the hooks go with the model: undone last
-      subs.push(modelSub);
+      modelSubs.push(modelSub);
     })();
     return () => {
       destroyed = true;
@@ -295,6 +297,8 @@
       for (const s of subs.splice(0)) s.dispose();
       plain?.dispose();
       diff?.dispose();
+      // the model's go last, with it
+      for (const s of modelSubs.splice(0)) s.dispose();
       model?.dispose();
       base?.dispose();
     };
