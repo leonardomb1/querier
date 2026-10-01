@@ -5,27 +5,32 @@
   import { copyText, writeClipboard, type Format } from "../lib/copy";
   import { highlights, marked, rowMatches, type Term } from "../lib/search";
   import { zoom } from "../lib/zoom.svelte";
-  import ColumnFilter, { KIND_ICON } from "./ColumnFilter.svelte";
+  import type { Kind } from "../lib/format";
   import Icon from "./Icon.svelte";
 
   let {
     table,
     terms = [],
-    filters = {},
-    onfilter,
-    partial = false,
     onmatches,
   }: {
     table: Table;
-    /** what rows to show: the search box's terms and the columns' filters (lib/search.ts) */
+    /** what rows to show: the search box's terms (lib/search.ts) */
     terms?: Term[];
-    /** each column's own filter, as terms: its header shows it, and opens it */
-    filters?: Record<string, Term[]>;
-    onfilter?: (col: string, terms: Term[]) => void;
-    /** the page holds part of the result */
-    partial?: boolean;
     onmatches?: (n: number) => void;
   } = $props();
+
+  /** A column's type as an icon (codicons). */
+  const KIND_ICON: Record<Kind, string> = {
+    int: "symbol-numeric",
+    float: "symbol-numeric",
+    decimal: "symbol-numeric",
+    date: "calendar",
+    timestamp: "calendar",
+    time: "clock",
+    bool: "symbol-boolean",
+    string: "symbol-string",
+    other: "symbol-misc",
+  };
 
   // must match the rem heights in the styles below, at the current zoom
   const ROW = $derived(zoom.px(26));
@@ -49,7 +54,7 @@
     sort = sort?.col !== i ? { col: i, dir: 1 } : sort.dir === 1 ? { col: i, dir: -1 } : null;
   }
 
-  // -- rows: search and filters (lib/search.ts), then sort, over the rows we have
+  // -- rows: search (lib/search.ts), then sort, over the rows we have
   const marks = $derived(cols.map((c) => highlights(terms, c.name)));
   const indices = $derived.by(() => {
     let idx = Array.from({ length: table.numRows }, (_, i) => i);
@@ -316,26 +321,6 @@
     return out;
   }
 
-  // -- a column's filter: its values (as the page holds them), most frequent first
-  let filtering = $state<{ col: number; x: number } | null>(null);
-  function openFilter(i: number, e: MouseEvent) {
-    e.stopPropagation();
-    clearTimeout(hoverTimer);
-    hovered = null;
-    const th = (e.currentTarget as HTMLElement).closest<HTMLElement>(".thc")!;
-    filtering = filtering?.col === i ? null : { col: i, x: Math.max(0, Math.min(th.offsetLeft, (wrapEl?.clientWidth ?? 0) - 260)) };
-  }
-  function valuesOf(i: number) {
-    const c = cols[i];
-    const counts = new Map<string | null, number>();
-    for (let r = 0; r < table.numRows; r++) {
-      const v = c.vec.get(r);
-      const key = v == null ? null : c.plain(v);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return [...counts].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)));
-  }
-
   function enter(i: number, e: PointerEvent) {
     clearTimeout(hoverTimer);
     const x = (e.currentTarget as HTMLElement).offsetLeft;
@@ -353,22 +338,6 @@
 <svelte:window onpointerdown={(e) => menu && !(e.target as HTMLElement).closest(".menu") && (menu = null)} />
 
 <div class="wrap" bind:this={wrapEl}>
-  {#if filtering && onfilter}
-    {@const c = cols[filtering.col]}
-    {#key filtering.col}
-      <div class="fpos" style:left="{filtering.x}px">
-        <ColumnFilter
-          name={c.name}
-          kind={c.kind}
-          values={valuesOf(filtering.col)}
-          {partial}
-          current={filters[c.name] ?? []}
-          onapply={(t) => onfilter(c.name, t)}
-          onclose={() => (filtering = null)}
-        />
-      </div>
-    {/key}
-  {/if}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     class="scroll"
@@ -384,28 +353,20 @@
     <div class="row head" style:grid-template-columns={template}>
       <span class="idx">#</span>
       {#each cols as c, i}
-        {@const filtered = !!filters[c.name]?.length}
-        <div class="thc" class:right={c.right} class:filtered>
-          <button
-            class="th"
-            class:right={c.right}
-            class:sorted={sort?.col === i}
-            onclick={() => cycle(i)}
-            onpointerenter={(e) => enter(i, e)}
-            onpointerleave={leave}
-            aria-label="{c.name}, {c.type}. Sort{sort?.col === i ? (sort.dir === 1 ? ', now ascending' : ', now descending') : ''}"
-          >
-            <span class="th-name">
-              <b>{c.name}</b>{#if sort?.col === i}<em aria-hidden="true">{sort.dir === 1 ? "↑" : "↓"}</em>{/if}
-            </span>
-            <i><Icon name={KIND_ICON[c.kind]} size={11} />{c.type}</i>
-          </button>
-          {#if onfilter}
-            <button class="fbtn" class:on={filtered || filtering?.col === i} title={filtered ? `Filtered: change or clear` : `Filter ${c.name}`} aria-label="Filter {c.name}" onclick={(e) => openFilter(i, e)}>
-              <Icon name={filtered ? "filter-filled" : "filter"} size={12} />
-            </button>
-          {/if}
-        </div>
+        <button
+          class="th"
+          class:right={c.right}
+          class:sorted={sort?.col === i}
+          onclick={() => cycle(i)}
+          onpointerenter={(e) => enter(i, e)}
+          onpointerleave={leave}
+          aria-label="{c.name}, {c.type}. Sort{sort?.col === i ? (sort.dir === 1 ? ', now ascending' : ', now descending') : ''}"
+        >
+          <span class="th-name">
+            <b>{c.name}</b>{#if sort?.col === i}<em aria-hidden="true">{sort.dir === 1 ? "↑" : "↓"}</em>{/if}
+          </span>
+          <i><Icon name={KIND_ICON[c.kind]} size={11} />{c.type}</i>
+        </button>
       {/each}
     </div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -505,54 +466,19 @@
   .head {
     position: sticky;
     top: 0;
-    z-index: 1;
+    /* above the rows' sticky numbers (z-index 1): the later of two equals would paint over it */
+    z-index: 3;
     height: 2.625rem;
     background: var(--surface);
     border-bottom: 1px solid var(--grid);
-  }
-  /* a header cell: the sort button, and its filter's at its edge (shown on hover, and while filtered) */
-  .thc {
-    position: relative;
-    min-width: 0;
-    height: 100%;
-  }
-  .fbtn {
-    position: absolute;
-    top: 0.25rem;
-    right: 0.125rem;
-    display: grid;
-    place-items: center;
-    width: 1.25rem;
-    height: 1.25rem;
-    padding: 0;
-    color: var(--muted);
-    border-radius: 3px;
-    opacity: 0;
-    transition: opacity 0.1s;
-  }
-  .thc.right .fbtn {
-    right: auto;
-    left: 0.125rem;
-  }
-  .thc:hover .fbtn,
-  .fbtn.on {
-    opacity: 1;
-  }
-  .fbtn.on {
-    color: var(--accent);
-  }
-  .fbtn:hover {
-    background: var(--hover);
-  }
-  .fpos {
-    position: absolute;
-    top: 0;
   }
   .th {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     justify-content: center;
+    /* a button is as wide as its text unless told: the whole cell, so a number's header ends where its values do */
+    width: 100%;
     height: 100%;
     line-height: 1.25;
     padding: 0 0.625rem;
