@@ -33,6 +33,15 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import polars as pl  # noqa: E402
 
+# A printed DataFrame (print(df)), readable by whoever reads it, a person or an AI client: a
+# markdown table, a row a line (nothing wrapped inside its cells), more of its columns and text
+# shown than polars' terminal defaults. A cell can still change any of it with pl.Config.
+pl.Config.set_tbl_formatting("ASCII_MARKDOWN")
+pl.Config.set_tbl_width_chars(1000)
+pl.Config.set_tbl_cols(20)
+pl.Config.set_tbl_rows(25)
+pl.Config.set_fmt_str_lengths(60)
+
 from sqlrefs import apply_edits, map_col, rewrite_refs  # noqa: E402
 
 PREVIEW_ROWS = 5000  # rows of a table sent to the host

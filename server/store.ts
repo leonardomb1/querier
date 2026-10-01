@@ -253,13 +253,30 @@ export class Store {
     return [book, cell];
   }
 
-  async save(nb: string, name: string, source: string) {
+  /** One change at a time to a notebook's files: two at once (an AI client adding cells in parallel)
+   *  would each renumber the folder under the other, and one of them would be lost. */
+  private queues = new Map<string, Promise<unknown>>();
+  private one<T>(nb: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.queues.get(nb) ?? Promise.resolve()).then(fn, fn);
+    const settled = next.catch(() => {});
+    this.queues.set(nb, settled);
+    settled.then(() => this.queues.get(nb) === settled && this.queues.delete(nb));
+    return next;
+  }
+
+  save(nb: string, name: string, source: string) {
+    return this.one(nb, () => this.saveNow(nb, name, source));
+  }
+  private async saveNow(nb: string, name: string, source: string) {
     const [book, cell] = await this.cell(nb, name);
     await Bun.write(join(book.dir, cell.file), source);
   }
 
   /** A new cell after `after` (or at the top), named `want` or a fresh name. */
-  async add(nb: string, lang: Lang, after: string | null, source = "", want?: string): Promise<string> {
+  add(nb: string, lang: Lang, after: string | null, source = "", want?: string): Promise<string> {
+    return this.one(nb, () => this.addNow(nb, lang, after, source, want));
+  }
+  private async addNow(nb: string, lang: Lang, after: string | null, source: string, want?: string): Promise<string> {
     const book = await this.load(nb);
     const taken = new Set(book.cells.map((c) => c.name));
     if (want != null && !CELL_NAME.test(want)) throw new UserError(`\`${want}\` is not a name: letters, digits and _`);
@@ -277,7 +294,10 @@ export class Store {
   }
 
   /** Rename a cell and the reads of it in the cells below; returns the cells rewritten. */
-  async rename(nb: string, name: string, to: string): Promise<string[]> {
+  rename(nb: string, name: string, to: string): Promise<string[]> {
+    return this.one(nb, () => this.renameNow(nb, name, to));
+  }
+  private async renameNow(nb: string, name: string, to: string): Promise<string[]> {
     if (!CELL_NAME.test(to)) throw new UserError(`\`${to}\` is not a name: letters, digits and _`);
     const [book, cell] = await this.cell(nb, name);
     if (book.cells.some((c) => c.name === to)) throw new UserError(`a cell is already named \`${to}\``);
@@ -308,18 +328,27 @@ export class Store {
   }
 
   /** Turn a cell into another language: its extension changes, nothing else. */
-  async setLang(nb: string, name: string, lang: Lang) {
+  setLang(nb: string, name: string, lang: Lang) {
+    return this.one(nb, () => this.setLangNow(nb, name, lang));
+  }
+  private async setLangNow(nb: string, name: string, lang: Lang) {
     const [book, cell] = await this.cell(nb, name);
     await move(book.dir, cell.file, cell.file.replace(/\.\w+$/, `.${EXT[lang]}`));
   }
 
-  async remove(nb: string, name: string) {
+  remove(nb: string, name: string) {
+    return this.one(nb, () => this.removeNow(nb, name));
+  }
+  private async removeNow(nb: string, name: string) {
     const [book, cell] = await this.cell(nb, name);
     await rm(join(book.dir, cell.file));
     await renumber(book.dir, book.cells.filter((c) => c !== cell).map((c) => c.file));
   }
 
-  async move(nb: string, name: string, by: number) {
+  move(nb: string, name: string, by: number) {
+    return this.one(nb, () => this.moveNow(nb, name, by));
+  }
+  private async moveNow(nb: string, name: string, by: number) {
     const book = await this.load(nb);
     const order = book.cells.map((c) => c.file);
     const i = book.cells.findIndex((c) => c.name === name);
