@@ -106,6 +106,14 @@ describe("run", () => {
     expect(nb.text).not.toContain("| region |");
   });
 
+  test("list_cells: each cell in a line, its state and what it reads, no sources", async () => {
+    const r = await call("list_cells", { notebook: "default/demo" });
+    expect(r.error).toBe(false);
+    expect(r.text).toMatch(/^4\. notes \(md, \d+ lines\)$/m);
+    expect(r.text).toMatch(/^3\. by_region \(sql, 7 lines, (fresh|stale|never)\); defines by_region; reads enrich$/m);
+    expect(r.text).not.toContain("SELECT");
+  });
+
   test("scratch queries see the notebook's tables; secrets are masked", async () => {
     const q = await call("run_query", { notebook: "default/demo", lang: "sql", source: "SELECT COUNT(*) AS n FROM enrich;" });
     expect(q.text).toContain("| 5000 |");
@@ -207,5 +215,25 @@ describe("report template", () => {
     expect(ok.error).toBe(false);
     expect((await call("read_notebook", { notebook: "default/demo" })).text).toContain("Report template: report.svelte");
     expect((await call("read_report_template", { notebook: "default/demo" })).text).toContain(`<Value cell="by_region"`);
+  }, 60_000);
+
+  test("edit_report_template: part of it, as edit_cell; all or nothing; the build's errors back", async () => {
+    const file = join(dir, "nb/default/demo/report.svelte");
+    const before = await Bun.file(file).text();
+    // ambiguous, or half of the edits failing: nothing changes
+    expect((await call("edit_report_template", { notebook: "default/demo", edits: [{ old: "cell=", new: "cell =" }] })).text).toContain("occurs");
+    const half = await call("edit_report_template", { notebook: "default/demo", edits: [{ old: "Top region", new: "Best" }, { old: "nope", new: "x" }] });
+    expect(half.error).toBe(true);
+    expect(await Bun.file(file).text()).toBe(before);
+    // a part changed: the lines around it, numbered, and it still builds
+    const ok = await call("edit_report_template", { notebook: "default/demo", edits: [{ old: `label="Top region"`, new: `label="Best region"` }] });
+    expect(ok.error).toBe(false);
+    expect(ok.text).toMatch(/\d+  <Value cell="by_region" column="revenue" label="Best region" \/>/);
+    expect(ok.text).toContain("It builds");
+    // one that breaks the build is saved, and says where
+    const broken = await call("edit_report_template", { notebook: "default/demo", edits: [{ old: "<p>{cells", new: "<p>{cells." }] });
+    expect(broken.error).toBe(true);
+    expect(broken.text).toContain("doesn't build");
+    await Bun.write(file, before);
   }, 60_000);
 });

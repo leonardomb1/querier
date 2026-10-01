@@ -255,13 +255,17 @@ notebook folder, so a pulled repo can't raise its own):
 **off**; **read** (the default: code, dependencies, schemas, errors, no rows);
 **run** (runs cells and scratch queries, sees results and images); **edit**
 (writes, renames, moves and deletes cells, lays out the report). Tools:
-`list_notebooks`, `read_notebook`, `describe` (DESCRIBE / SHOW TABLES),
+`list_notebooks`, `list_cells` (each cell in a line: its state, what it defines and reads), `read_notebook`, `describe` (DESCRIBE / SHOW TABLES),
 `check_sql` (`basalt check`), `basalt_reference` (sections of basalt's
 `language.md`), `get_output`, `run_cells` (stale ancestors
 first, as the Run button), `run_query`, `write_cell`, `rename_cell`,
 `edit_cell` (exact find-and-replace, all or nothing), `move_cell`, `delete_cell`,
-`set_report`. Runs and edits go through the same
-paths as the UI, so open tabs show them; a token acts as its owner, in their own
+`set_report`, and for a template report `read_report_template`,
+`write_report_template` and `edit_report_template` (find-and-replace, as
+`edit_cell`; each returns the build's errors). Runs and edits go through the same
+paths as the UI, so open tabs show them, and whoever has the notebook open sees the client
+there as a collaborator (its token's name, an AI mark: in the cell it changed, its cursor
+where it changed it, for a while after); a token acts as its owner, in their own
 kernel with their connections, and output is masked, so credentials never reach a client. Requests
 from a browser page on another origin are refused.
 

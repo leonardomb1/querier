@@ -32,6 +32,18 @@ export interface Presence {
   id: string;
   name: string;
   color: number;
+  /** an AI client (an MCP token): whose token it is */
+  agent?: { owner: string };
+}
+
+/** How long an AI client stays shown after what it last did. */
+const AGENT_MS = 20_000;
+
+/** An awareness client id for an AI client: the same for it every time, apart from pages' random ones. */
+function agentClient(id: string): number {
+  let h = 2166136261;
+  for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return h || 1;
 }
 
 export const presenceOf = (p: Principal): Presence => ({
@@ -104,7 +116,15 @@ class Room {
 
   /** The cells' files into the document: new ones added, gone ones dropped, changed ones
    *  patched, except a cell with edits not yet written (they win; they are written next). */
-  async reload() {
+  /** the last reload of the files: an AI client's presence waits for it, to point into the new text */
+  reloading: Promise<void> = Promise.resolve();
+
+  reload(): Promise<void> {
+    this.reloading = this.reloadNow();
+    return this.reloading;
+  }
+
+  private async reloadNow() {
     const book = await this.store.load(this.nb);
     const cells = this.cells();
     this.doc.transact(() => {
@@ -136,6 +156,29 @@ class Room {
       this.saved(this.nb);
     });
     return this.writing;
+  }
+
+  // -- AI clients (MCP): present while they act, as a person would be: in the cell they changed,
+  // their cursor where they changed it; gone a while after the last thing they did
+  private agents = new Map<string, { client: number; clock: number; timer?: ReturnType<typeof setTimeout> }>();
+
+  agentAt(who: Presence, cell: string | null, offset?: number) {
+    let a = this.agents.get(who.id);
+    if (!a) this.agents.set(who.id, (a = { client: agentClient(who.id), clock: 0 }));
+    const text = cell ? this.cells().get(cell) : undefined;
+    const at = text && offset != null ? Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, Math.max(0, Math.min(offset, text.length)))) : null;
+    this.agentState(a, { user: who, cell: text ? cell : null, cursor: at ? { cell, anchor: at, head: at } : null });
+    clearTimeout(a.timer);
+    a.timer = setTimeout(() => this.agentState(a!, null), AGENT_MS);
+  }
+
+  private agentState(a: { client: number; clock: number }, state: object | null) {
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, 1);
+    encoding.writeVarUint(enc, a.client);
+    encoding.writeVarUint(enc, ++a.clock);
+    encoding.writeVarString(enc, JSON.stringify(state));
+    awarenessProtocol.applyAwarenessUpdate(this.awareness, encoding.toUint8Array(enc), "agent");
   }
 
   join(peer: Peer, presence: Presence, canEdit: () => boolean) {
@@ -216,6 +259,7 @@ class Room {
   }
 
   close() {
+    for (const a of this.agents.values()) clearTimeout(a.timer);
     this.awareness.destroy();
     this.doc.destroy();
   }
@@ -280,6 +324,14 @@ export class Rooms {
   /** The notebook's files changed otherwise (cells added, renamed, moved or removed, a pull, an AI client). */
   async changed(nb: string) {
     await this.rooms.get(nb)?.reload().catch((e) => console.error(`collab: reloading ${nb}:`, e.message));
+  }
+
+  /** An AI client acted on a notebook: shown in it to whoever has it open (none open: nothing to show). */
+  async agent(nb: string, who: Presence, cell: string | null, offset?: number) {
+    const room = this.rooms.get(nb);
+    if (!room) return;
+    await room.reloading.catch(() => {});
+    room.agentAt(who, cell, offset);
   }
 
   /** Everything typed so far on disk: before something reads the files. */

@@ -30,6 +30,8 @@ export interface Ctx {
   hosts(nb: string): Host[];
   /** The notebook's files changed: open tabs reload them. */
   changed(nb: string): void;
+  /** This client acted on a notebook (a cell it changed, and where, or ran): whoever has it open sees it there. */
+  activity?(nb: string, cell: string | null, offset?: number): void;
   /** May the token's owner do `action` to notebook `nb` (their roles, shares and policies)? */
   may(nb: string, action: "notebook.view" | "notebook.readCode" | "notebook.run" | "notebook.edit"): Promise<boolean>;
 }
@@ -54,7 +56,7 @@ Notebooks live in workspaces (folders of notebooks that share connections, sandb
 - basalt SQL is not standard SQL (PUSHDOWN, conn.QUERY($$...$$), IDENTIFIER(), LOAD INTO, FOR EACH ROW OF, ...). Call basalt_reference before writing non-trivial SQL, and check_sql before saving it.
 - Credentials are Connections, handed to the kernel as environment variables (those the token's owner may use, with their own credentials where a connection is per person): a connection named sr reads SR_USER / SR_PASS, OPTIONS can say token = env('GH_TOKEN'), Python reads os.environ. Never write a password into a cell, and never ask for one; ask the user to add a connection in Querier (or, for a per-person one, to enter their own credentials there).
 - Each notebook has an AI access level set by its owner: read (code, dependencies, schemas, errors; no rows), run (also runs cells and queries and sees results), edit (also changes cells and the report). A call beyond it fails; say so rather than working around it.
-- A report can instead be a Svelte 5 template (write_report_template), for layouts the blocks can't express: KPI tiles, custom HTML around the cells' outputs.
+- A report can instead be a Svelte 5 template (write_report_template), for layouts the blocks can't express: KPI tiles, custom HTML around the cells' outputs. To change part of one, edit_report_template, as edit_cell does a cell's.
 - Every notebook is also a report: its cells in order with code hidden, markdown as prose, and controls for its PARAMs. By default it shows markdown and the cells no other cell reads; set_report lays it out as blocks: any order, widths in twelfths, the parts of a cell's output to show, titles, and text of the report's own. Charts are Altair in Python cells. An Altair selection named after a PARAM (alt.selection_point(name="region", fields=["region"])) sets that PARAM when clicked in the report.`;
 
 const text = (t: string): { content: Content[] } => ({ content: [{ type: "text", text: t }] });
@@ -90,6 +92,51 @@ function sections(md: string) {
   return out;
 }
 
+
+/** Find-and-replace edits, as edit_cell and edit_report_template take them. */
+const editsArg = (what: string) =>
+  z
+    .array(
+      z.object({
+        old: z.string().min(1).describe(`Text to find, exactly as in ${what}`),
+        new: z.string().describe("Its replacement"),
+        all: z.boolean().optional().describe("Replace every occurrence (default: exactly one)"),
+      }),
+    )
+    .min(1);
+
+/** Apply edits in order, all or nothing: each `old` must occur once (or `all`). The lines changed, for an excerpt. */
+export function applyEdits(source: string, edits: { old: string; new: string; all?: boolean }[], what: string): { src: string; changed: number[]; at: number } {
+  let src = source;
+  const changed: number[] = [];
+  let first = -1;
+  edits.forEach((e, i) => {
+    const n = src.split(e.old).length - 1;
+    const which = edits.length > 1 ? `Edit ${i + 1}: ` : "";
+    if (n === 0) throw new Error(`${which}\`old\` isn't in ${what} (after the edits before it). Nothing was changed.`);
+    if (n > 1 && !e.all) throw new Error(`${which}\`old\` occurs ${n} times in ${what}: add context to make it unique, or set \`all\`. Nothing was changed.`);
+    const at = src.indexOf(e.old);
+    src = e.all ? src.split(e.old).join(e.new) : src.slice(0, at) + e.new + src.slice(at + e.old.length);
+    changed.push(src.slice(0, at).split("\n").length);
+    if (first < 0) first = at + e.new.length;
+  });
+  return { src, changed, at: Math.max(0, first) };
+}
+
+/** The changed lines with a little context, numbered, so the next edit can aim. */
+function excerpt(src: string, changed: number[]): string {
+  const lines = src.split("\n");
+  const shown = new Set<number>();
+  for (const l of changed) for (let k = Math.max(1, l - 2); k <= Math.min(lines.length, l + 4); k++) shown.add(k);
+  let prev = 0;
+  const out: string[] = [];
+  for (const k of [...shown].sort((a, b) => a - b)) {
+    if (prev && k > prev + 1) out.push("…");
+    out.push(`${String(k).padStart(4)}  ${lines[k - 1]}`);
+    prev = k;
+  }
+  return out.join("\n");
+}
 
 export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
   const server = new McpServer({ name: "querier", version: "0.1.0" }, { instructions: INSTRUCTIONS });
@@ -155,6 +202,42 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
         );
       }
       return text(lines.length ? lines.join("\n") : "No notebooks are available to AI clients.");
+    },
+  );
+
+  tool(
+    "list_cells",
+    {
+      title: "List a notebook's cells",
+      description:
+        "The cells in order, one line each: name, language, size, whether it is fresh, stale or never run (or failed), and what it defines and reads. No sources or outputs: read_notebook has those, get_output a cell's rows. The names are what the other tools (edit_cell, delete_cell, run_cells…) take.",
+      readOnly: true,
+    },
+    { notebook: nbArg },
+    async ({ notebook }) => {
+      await open(notebook, "read", "list_cells");
+      const h = ctx.host(notebook);
+      await h.analyzeNow();
+      const book = await store.load(notebook);
+      const snap = h.snapshot();
+      const order = book.cells.map((c) => c.name);
+      const up = edges(order, snap.deps);
+      const ran = Object.fromEntries([...snap.outputs].map(([k, o]) => [k, o.ran]));
+      const sources = Object.fromEntries(book.cells.map((c) => [c.name, c.source]));
+      const code = new Set(book.cells.filter((c) => c.lang !== "md").map((c) => c.name));
+      const fresh = freshness(order, up, snap.deps, ran, sources, {}, code);
+      if (!book.cells.length) return text(`\`${notebook}\` has no cells.`);
+      const lines = book.cells.map((c, i) => {
+        const o = snap.outputs.get(c.name);
+        const d = snap.deps[c.name];
+        const n = c.source.split("\n").filter((l, k, all) => l || k < all.length - 1).length;
+        const size = `${n} line${n === 1 ? "" : "s"}`;
+        const state = c.lang === "md" ? "" : `, ${o?.state === "error" ? "failed" : o?.state === "running" || o?.state === "queued" ? o.state : fresh[c.name]}`;
+        const reads = d?.reads.filter((r) => !r.startsWith("fn:")) ?? [];
+        const deps = c.lang === "md" || !d ? "" : `; defines ${d.defines.join(", ") || "—"}; reads ${reads.join(", ") || "—"}`;
+        return `${i + 1}. ${c.name} (${c.lang}, ${size}${state})${deps}`;
+      });
+      return text(`${book.title} (\`${notebook}\`), ${book.cells.length} cell${book.cells.length === 1 ? "" : "s"}${book.template != null ? ", and report.svelte" : ""}:\n${lines.join("\n")}`);
     },
   );
 
@@ -335,6 +418,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
     async ({ notebook, cells, params, rows, wait_seconds }) => {
       await open(notebook, "run", "run_cells");
       const h = ctx.host(notebook);
+      ctx.activity?.(notebook, cells.at(-1) ?? null);
       const { cells: ran, finished } = await h.runAndWait(cells, params ?? {}, (wait_seconds ?? 60) * 1000);
       if (!ran.length) return text("Nothing to run: those are Markdown cells.");
       const outputs = h.snapshot().outputs;
@@ -393,12 +477,14 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
         if (lang && lang !== cur.lang) await store.setLang(notebook, cell, lang as Lang);
         await store.save(notebook, cell, source);
         ctx.changed(notebook);
+        ctx.activity?.(notebook, cell, source.length);
         return text(`Saved \`${cell}\`.`);
       }
       if (!lang) throw new Error(`There's no cell \`${cell}\`; give \`lang\` to add one.`);
       if (after && !book.cells.some((c) => c.name === after)) throw new Error(`There's no cell \`${after}\`.`);
       await store.add(notebook, lang as Lang, after ?? book.cells.at(-1)?.name ?? null, source, cell);
       ctx.changed(notebook);
+      ctx.activity?.(notebook, cell, source.length);
       return text(`Added \`${cell}\`${after ? ` after \`${after}\`` : " at the end"}.`);
     },
   );
@@ -413,46 +499,18 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
     {
       notebook: nbArg,
       cell: z.string(),
-      edits: z
-        .array(
-          z.object({
-            old: z.string().min(1).describe("Text to find, exactly as in the cell"),
-            new: z.string().describe("Its replacement"),
-            all: z.boolean().optional().describe("Replace every occurrence (default: exactly one)"),
-          }),
-        )
-        .min(1),
+      edits: editsArg("the cell"),
     },
     async ({ notebook, cell, edits }) => {
       await open(notebook, "edit", "edit_cell");
       const cur = (await store.load(notebook)).cells.find((c) => c.name === cell);
       if (!cur) throw new Error(`There's no cell \`${cell}\`.`);
-      let src = cur.source;
-      const changed: number[] = [];
-      edits.forEach((e, i) => {
-        const n = src.split(e.old).length - 1;
-        const which = edits.length > 1 ? `Edit ${i + 1}: ` : "";
-        if (n === 0) throw new Error(`${which}\`old\` isn't in \`${cell}\` (after the edits before it). Nothing was changed.`);
-        if (n > 1 && !e.all) throw new Error(`${which}\`old\` occurs ${n} times in \`${cell}\`: add context to make it unique, or set \`all\`. Nothing was changed.`);
-        const at = src.indexOf(e.old);
-        src = e.all ? src.split(e.old).join(e.new) : src.slice(0, at) + e.new + src.slice(at + e.old.length);
-        changed.push(src.slice(0, at).split("\n").length);
-      });
+      const { src, changed, at } = applyEdits(cur.source, edits, `\`${cell}\``);
       if (src === cur.source) return text(`\`${cell}\` is unchanged.`);
       await store.save(notebook, cell, src);
       ctx.changed(notebook);
-      // the changed lines with a little context, numbered, so the next edit can aim
-      const lines = src.split("\n");
-      const shown = new Set<number>();
-      for (const l of changed) for (let k = Math.max(1, l - 2); k <= Math.min(lines.length, l + 4); k++) shown.add(k);
-      let prev = 0;
-      const out: string[] = [];
-      for (const k of [...shown].sort((a, b) => a - b)) {
-        if (prev && k > prev + 1) out.push("…");
-        out.push(`${String(k).padStart(4)}  ${lines[k - 1]}`);
-        prev = k;
-      }
-      return text(`Edited \`${cell}\` (${edits.length} edit${edits.length === 1 ? "" : "s"}):\n${out.join("\n")}`);
+      ctx.activity?.(notebook, cell, at);
+      return text(`Edited \`${cell}\` (${edits.length} edit${edits.length === 1 ? "" : "s"}):\n${excerpt(src, changed)}`);
     },
   );
 
@@ -465,6 +523,7 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
       const updated = await store.rename(notebook, cell, to);
       for (const h of ctx.hosts(notebook)) await h.renamed(cell, to);
       ctx.changed(notebook);
+      ctx.activity?.(notebook, to);
       return text(`Renamed \`${cell}\` to \`${to}\`${updated.length ? `; updated ${updated.join(", ")}` : ""}.`);
     },
   );
@@ -483,19 +542,25 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
       if (after != null && at === 0) throw new Error(`There's no cell \`${after}\`.`);
       if (at !== from) await store.move(notebook, cell, at - from);
       ctx.changed(notebook);
+      ctx.activity?.(notebook, cell);
       return text(`Moved \`${cell}\`${after ? ` after \`${after}\`` : " to the top"}.`);
     },
   );
 
   tool(
     "delete_cell",
-    { title: "Delete a cell", description: "Delete a cell's file. If the notebook is under git, the deletion shows as a change until committed.", destructive: true },
+    {
+      title: "Delete a cell",
+      description: "Delete a cell (by its name, as list_cells gives it) and its file. If the notebook is under git, the deletion shows as a change until committed.",
+      destructive: true,
+    },
     { notebook: nbArg, cell: z.string() },
     async ({ notebook, cell }) => {
       await open(notebook, "edit", "delete_cell");
       await store.remove(notebook, cell);
       for (const h of ctx.hosts(notebook)) await h.removed(cell);
       ctx.changed(notebook);
+      ctx.activity?.(notebook, null);
       return text(`Deleted \`${cell}\`.`);
     },
   );
@@ -524,12 +589,13 @@ export function mcpServer(ctx: Ctx, client: ClientInfo): McpServer {
   <Chart cell="x" />   <Table cell="x" columns={["a", "b"]} />
   <Value cell="x" column="revenue" row={0} label="Revenue" format="number|currency|percent|compact" currency="BRL" decimals={0} compare={1} />
   <Control param="region" options={["north", "south"]} />   or setParam("region", value) from your own markup
-The app's theme is there as CSS variables (--ink, --ink-2, --muted, --surface, --hair, --accent, --sans, --mono) in light and dark; use them rather than fixed colours. Returns the build's errors, with line and column, so they can be fixed.`,
+The app's theme is there as CSS variables (--ink, --ink-2, --muted, --surface, --hair, --accent, --sans, --mono) in light and dark; use them rather than fixed colours. Returns the build's errors, with line and column, so they can be fixed. To change part of an existing template, edit_report_template is cheaper.`,
     },
     { notebook: nbArg, source: z.string() },
     async ({ notebook, source }) => {
       await open(notebook, "edit", "write_report_template");
       await store.saveTemplate(notebook, source);
+      ctx.activity?.(notebook, null);
       const book = await store.load(notebook);
       if (book.report?.view === "blocks") await store.settings(notebook, { report: { ...book.report, view: "template" } });
       ctx.changed(notebook);
@@ -537,6 +603,31 @@ The app's theme is there as CSS variables (--ink, --ink-2, --muted, --surface, -
       return b.error
         ? fail(`Saved, but it doesn't build: ${b.error.line ? `line ${b.error.line}${b.error.col ? `:${b.error.col}` : ""}: ` : ""}${b.error.message}`)
         : text(`Saved report.svelte; it builds, and the report shows it.`);
+    },
+  );
+
+  tool(
+    "edit_report_template",
+    {
+      title: "Edit the report template",
+      description:
+        "Change part of report.svelte, as edit_cell does a cell's: each edit replaces `old` with `new`, exactly as written (whitespace included), in order. `old` must occur once, unless `all` is set. Either every edit applies or none does. Cheaper and safer than rewriting it with write_report_template. Returns the changed lines, numbered, and the build's errors with line and column.",
+    },
+    { notebook: nbArg, edits: editsArg("report.svelte") },
+    async ({ notebook, edits }) => {
+      await open(notebook, "edit", "edit_report_template");
+      const cur = await store.template(notebook);
+      if (cur == null) throw new Error("This notebook has no report template: write one with write_report_template.");
+      const { src, changed } = applyEdits(cur, edits, "report.svelte");
+      if (src === cur) return text("report.svelte is unchanged.");
+      await store.saveTemplate(notebook, src);
+      ctx.changed(notebook);
+      ctx.activity?.(notebook, null);
+      const b = await buildTemplate(src, await ctx.templatePackages?.(notebook));
+      const lines = `Edited report.svelte (${edits.length} edit${edits.length === 1 ? "" : "s"}):\n${excerpt(src, changed)}`;
+      return b.error
+        ? fail(`${lines}\n\nSaved, but it doesn't build: ${b.error.line ? `line ${b.error.line}${b.error.col ? `:${b.error.col}` : ""}: ` : ""}${b.error.message}`)
+        : text(`${lines}\n\nIt builds, and the report shows it.`);
     },
   );
 

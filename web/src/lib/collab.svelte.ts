@@ -19,6 +19,8 @@ export interface PeerUser {
   name: string;
   /** 0–7: their color, the same for them everywhere */
   color: number;
+  /** an AI client (an MCP token) acting in the notebook: whose token it is */
+  agent?: { owner: string };
 }
 
 /** A cursor or selection in a cell, as positions that follow the text as it changes. */

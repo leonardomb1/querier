@@ -4,7 +4,7 @@
 
 import { join, resolve } from "node:path";
 import { Host, type CellOutput, type Client } from "./host";
-import { Rooms } from "./collab";
+import { colorOf, Rooms, type Presence } from "./collab";
 import { deliver, drained } from "./socket";
 import * as os from "node:os";
 import { encodeFrame } from "./runner/protocol";
@@ -421,7 +421,10 @@ async function mcp(req: Request, srv: { timeout(req: Request, seconds: number): 
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   const may: Ctx["may"] = async (nb, action) => authz.can(owner, action, await authz.notebook(nb), true);
   // its runs are in the owner's own kernel, as their tabs' are
-  const server = mcpServer({ ...mcpCtx, may, host: (nb) => hostOf(nb, owner) }, client);
+  // what it does shows in the notebook to whoever has it open, as a collaborator: its token's name, an AI's
+  const agent: Presence = { id: `agent:${client.id}`, name: client.name, color: colorOf(`agent:${client.id}`), agent: { owner: owner.name ?? owner.username } };
+  const activity = (nb: string, cell: string | null, offset?: number) => void rooms.agent(nb, agent, cell, offset).catch(() => {});
+  const server = mcpServer({ ...mcpCtx, may, host: (nb) => hostOf(nb, owner), activity }, client);
   await server.connect(transport);
   try {
     return await transport.handleRequest(req);
