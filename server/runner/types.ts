@@ -107,6 +107,8 @@ export interface Session {
   /** The rows of a result matching a search (web/src/lib/search.ts), over the whole
    *  table: the first of them as Arrow IPC, and how many there are. */
   filter(name: string, terms: unknown[]): Promise<{ rows: number; of: number; truncated: boolean; columns: Column[]; arrow: Uint8Array }>;
+  /** Each column of a whole result, profiled: how full, distinct, a histogram or top values. */
+  profile(name: string): Promise<{ rows: number; columns: Record<string, unknown> }>;
   /** Every problem in a SQL script, without running it: against the session,
    *  with `known` as tables other cells will make (checked by name). */
   check(source: string, known: string[]): Promise<Diagnostic[]>;

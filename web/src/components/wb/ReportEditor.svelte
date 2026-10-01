@@ -459,6 +459,7 @@
               show={b.parts}
               exportUrl={ctl.offline ? undefined : exportUrl(b.cell)}
               onsearch={ctl.offline ? undefined : (terms) => ctl.conn.filter(b.cell!, terms)}
+              onprofile={ctl.offline ? undefined : () => ctl.conn.profile(b.cell!)}
               params={paramNames}
               {onparam}
               onstop={() => ctl.interrupt()}

@@ -735,6 +735,7 @@ const SOCKET_NEEDS = {
   complete: "notebook.run",
   inspect: "notebook.run",
   filter: "notebook.run",
+  profile: "notebook.run",
   check: "notebook.readCode",
   "terminal-open": "notebook.shell",
   "terminal-input": "notebook.shell",
@@ -750,6 +751,7 @@ function refuseSocket(ws: Client, msg: { op?: string; id?: number }, action: Act
   else if (msg.op === "check") frame({ type: "check", id: msg.id, diagnostics: [] });
   else if (msg.op === "inspect") frame({ type: "inspect", id: msg.id, columns: [], rows: [], error: message });
   else if (msg.op === "filter") frame({ type: "filtered", id: msg.id, error: message });
+  else if (msg.op === "profile") frame({ type: "profiled", id: msg.id, error: message });
   else if (msg.op === "terminal-open") frame({ type: "terminal-exit", term: (msg as any).term, message });
   frame({ type: "denied", op: msg.op, message });
 }
@@ -760,6 +762,7 @@ const REPORT_SOCKET_NEEDS = {
   interrupt: "report.view",
   restart: "report.view",
   filter: "report.view",
+  profile: "report.view",
 } as const;
 
 /** A published report's viewer asks something of their report kernel. */
@@ -804,6 +807,8 @@ async function reportMessage(ws: Client, msg: any): Promise<unknown> {
       return h.restart();
     case "filter":
       return h.filterFor(ws, msg.id, msg.cell, msg.terms ?? []);
+    case "profile":
+      return h.profileFor(ws, msg.id, msg.cell);
   }
 }
 
@@ -2091,6 +2096,8 @@ const server = Bun.serve<Client["data"], any>({
           return h.checkFor(ws, msg.id, msg.source, msg.cell);
         case "filter":
           return h.filterFor(ws, msg.id, msg.cell, msg.terms ?? []);
+        case "profile":
+          return h.profileFor(ws, msg.id, String(msg.cell));
         case "terminal-open":
           auth.audit.log({ actor: ws.data.principal.id, action: "terminal.open", detail: { notebook: ws.data.nb } });
           return h.openTerminal(ws, String(msg.term), Number(msg.cols) || 80, Number(msg.rows) || 24);

@@ -3,6 +3,7 @@
   import { fade, scale, slide } from "svelte/transition";
   import type { Output } from "../lib/conn.svelte";
   import { arrowTable } from "../lib/format";
+  import type { ColumnProfile } from "../lib/profile";
   import { parseSearch, type Term } from "../lib/search";
   import Icon from "./Icon.svelte";
   import Menu from "./Menu.svelte";
@@ -14,7 +15,43 @@
     out,
     exportUrl,
     onsearch,
-  }: { out: Extract<Output, { type: "table" }>; exportUrl?: string; onsearch?: (terms: Term[]) => Promise<Found> } = $props();
+    onprofile,
+  }: {
+    out: Extract<Output, { type: "table" }>;
+    exportUrl?: string;
+    onsearch?: (terms: Term[]) => Promise<Found>;
+    onprofile?: () => Promise<{ columns: Record<string, ColumnProfile>; error?: string }>;
+  } = $props();
+
+  // -- the columns' profiles (lib/profile.ts): above their names when turned on (remembered in this
+  // browser), and in the card a header's hover shows; the whole result's, asked of the kernel once,
+  // when the page holds only part of it
+  const PROFILES = "querier:profiles";
+  let profiles = $state((() => {
+    try {
+      return localStorage.getItem(PROFILES) === "1";
+    } catch {
+      return false;
+    }
+  })());
+  function toggleProfiles() {
+    profiles = !profiles;
+    try {
+      localStorage.setItem(PROFILES, profiles ? "1" : "0");
+    } catch {}
+  }
+  let exact = $state<Record<string, ColumnProfile> | null>(null);
+  let exactAsked: unknown = null;
+  function needExact() {
+    if (exactAsked === out || !onprofile || !out.truncated) return;
+    exactAsked = out;
+    const asked = out;
+    onprofile().then((r) => asked === out && !r.error && (exact = r.columns), () => {});
+  }
+  $effect(() => {
+    void out;
+    exact = null;
+  });
 
   let exporting = $state("");
   let exportError = $state("");
@@ -194,6 +231,9 @@
       {:else}
         <button class="icon" title="Search rows" aria-label="Search rows" onclick={open}><Icon name="search" size={14} /></button>
       {/if}
+      <button class="icon prof" class:on={profiles} title={profiles ? "Hide the column profiles" : "Show each column's profile above it"} aria-label="Column profiles" aria-pressed={profiles} onclick={toggleProfiles}>
+        <Icon name="graph" size={14} />
+      </button>
       {#if exportUrl && out.name}
         <Menu
           icon="download"
@@ -206,10 +246,14 @@
       {/if}
     </span>
   </div>
-  <Table table={shown} {terms} onmatches={(n) => (matches = n)} />
+  <Table table={shown} {terms} {profiles} exact={full ? null : exact} total={full ? full.rows : out.rows} onneedexact={needExact} onmatches={(n) => (matches = n)} />
 </div>
 
 <style>
+  .icon.prof.on {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
   .result {
     display: flex;
     flex-direction: column;

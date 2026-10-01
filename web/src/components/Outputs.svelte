@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { ColumnProfile } from "../lib/profile";
   import { fade } from "svelte/transition";
   import type { CellRun, Output } from "../lib/conn.svelte";
   import LoadProgress from "./LoadProgress.svelte";
@@ -16,6 +17,8 @@
     exportUrl?: string;
     /** A search over the cell's whole result, in the kernel. */
     onsearch?: (terms: Term[]) => Promise<{ rows: number; of: number; truncated: boolean; arrow?: Uint8Array; error?: string }>;
+    /** the cell's whole result, profiled by the kernel (lib/profile.ts) */
+    onprofile?: () => Promise<{ columns: Record<string, ColumnProfile>; error?: string }>;
     /** Only these parts (a report block's choice); errors and loads always show. */
     show?: ReportPart[];
     /** A chart selection named after one of these PARAMs sets it (the report). */
@@ -26,7 +29,7 @@
     sandbox?: { egress: string } | null;
     onsandbox?: () => void;
   }
-  let { run, cell, exportUrl, onsearch, show, params, onparam, onstop, sandbox = null, onsandbox }: Props = $props();
+  let { run, cell, exportUrl, onsearch, onprofile, show, params, onparam, onstop, sandbox = null, onsandbox }: Props = $props();
   const NETWORK = /refused|unreachable|timed? ?out|getaddrinfo|name or service|could not resolve|nodename|no route|network/i;
 
   type Load = Extract<Output, { type: "load" }>;
@@ -94,7 +97,7 @@
             {/if}
           {:else if o.type === "table"}
             <!-- only the cell's own result is kept under a name the kernel can export -->
-            <Result out={o} exportUrl={o.name === cell ? exportUrl : undefined} onsearch={o.name === cell ? onsearch : undefined} />
+            <Result out={o} exportUrl={o.name === cell ? exportUrl : undefined} onsearch={o.name === cell ? onsearch : undefined} onprofile={o.name === cell ? onprofile : undefined} />
           {/if}
         {/if}
       </div>

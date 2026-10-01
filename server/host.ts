@@ -675,6 +675,16 @@ export class Host {
     }
   }
 
+  async profileFor(ws: Client, id: number, cell: string) {
+    this.touch();
+    try {
+      if (!this.session) throw new Error("The kernel isn't running.");
+      this.send([ws], { type: "profiled", id, ...(await this.session.profile(cell)) });
+    } catch (e: any) {
+      this.send([ws], { type: "profiled", id, error: e.message });
+    }
+  }
+
   async checkFor(ws: Client, id: number, source: string, cell?: string) {
     const diagnostics = await this.check(source, cell).catch(() => []);
     this.send([ws], { type: "check", id, diagnostics });

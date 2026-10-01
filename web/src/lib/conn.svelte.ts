@@ -4,6 +4,7 @@
 import type { Deps, Ran } from "../../../shared/graph";
 import { homeHref, nbHref, viewHref, wsHref } from "./href";
 import { loginHref } from "./api";
+import type { ColumnProfile } from "./profile";
 
 export type CellState = "idle" | "queued" | "running" | "ok" | "error";
 
@@ -261,6 +262,10 @@ export class NotebookConn {
         this.waiting.get(meta.id)?.({ ...meta, arrow: data });
         this.waiting.delete(meta.id);
         break;
+      case "profiled":
+        this.waiting.get(meta.id)?.(meta);
+        this.waiting.delete(meta.id);
+        break;
       case "complete":
       case "inspect":
       case "check":
@@ -279,7 +284,7 @@ export class NotebookConn {
         break;
       // (a completion, a check, a table's rows: answered empty where they were asked)
       case "denied":
-        if (!["complete", "check", "inspect", "filter", "terminal-open", "terminal-input", "terminal-resize", "terminal-close"].includes(meta.op)) this.onnotice?.(meta.message);
+        if (!["complete", "check", "inspect", "filter", "profile", "terminal-open", "terminal-input", "terminal-resize", "terminal-close"].includes(meta.op)) this.onnotice?.(meta.message);
         break;
       // renamed or deleted, here or in another tab: follow it, or go back to the list
       case "moved":
@@ -349,6 +354,11 @@ export class NotebookConn {
   /** A search over a cell's whole result in the kernel: the first matching rows, and how many. */
   filter(cell: string, terms: unknown[]): Promise<{ rows: number; of: number; truncated: boolean; arrow?: Uint8Array; error?: string }> {
     return this.ask({ op: "filter", cell, terms }, 60_000, { rows: 0, of: 0, truncated: false, error: "the search timed out" });
+  }
+
+  /** Each column of a cell's whole result, profiled by the kernel (lib/profile.ts). */
+  profile(cell: string): Promise<{ rows: number; columns: Record<string, ColumnProfile>; error?: string }> {
+    return this.ask({ op: "profile", cell }, 60_000, { rows: 0, columns: {}, error: "the profile timed out" });
   }
 
   /** Every problem basalt's check finds in a SQL cell, without running it. */

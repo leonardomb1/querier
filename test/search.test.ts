@@ -97,3 +97,28 @@ test("over a result longer than the page holds, the kernel finds matches past th
     await s.close();
   }
 }, 60_000);
+
+test("a column's profile: the kernel's over the whole result agrees with the page's over the same rows", async () => {
+  const { formatter, kindOf, numeric, plainText } = await import("../web/src/lib/format");
+  const { profileOf } = await import("../web/src/lib/profile");
+  const s = await new LocalRunner().open({ notebookDir: resolve(import.meta.dir, "fixtures/demo") });
+  try {
+    for await (const _ of s.run({ name: "p", lang: "sql", source: gen(3000) }));
+    const kernel = await s.profile("p");
+    expect(kernel.rows).toBe(3000);
+    const all = tableFromIPC((await s.filter("p", [])).arrow);
+    for (const f of all.schema.fields) {
+      const page = profileOf({ kind: kindOf(f.type), vec: all.getChild(f.name)!, fmt: formatter(f), num: numeric(f), plain: plainText(f) }, all.numRows);
+      const k = kernel.columns[f.name] as any;
+      // (top values tied in count may come in either order)
+      const top = (t?: { value: string; count: number }[]) => t?.map((x) => `${x.value}:${x.count}`).sort();
+      expect({ col: f.name, nulls: k.nulls, distinct: k.distinct, hist: k.hist, top: top(k.top) }).toEqual({ col: f.name, nulls: page.nulls, distinct: page.distinct, hist: page.hist, top: top(page.top) });
+      if (k.mean != null) expect(Math.abs(k.mean - page.mean!)).toBeLessThan(1e-9);
+    }
+    expect((kernel.columns.region as any).top.map((t: any) => t.count)).toEqual([1000, 1000, 1000]);
+    expect((kernel.columns.day as any).min).toBe("2025-01-01");
+    await expect(s.profile("nope")).rejects.toThrow("run it first");
+  } finally {
+    await s.close();
+  }
+}, 60_000);

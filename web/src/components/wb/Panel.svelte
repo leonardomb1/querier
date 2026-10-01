@@ -88,7 +88,7 @@
         <p class="empty">Open a cell, or select one in the notebook, to see its results here.</p>
       {:else if run?.outputs.length}
         <div class="results">
-          <Outputs {run} {cell} {exportUrl} onsearch={(terms) => ctl.conn.filter(cell, terms)} onstop={() => ctl.interrupt()} />
+          <Outputs {run} {cell} {exportUrl} onsearch={(terms) => ctl.conn.filter(cell, terms)} onprofile={() => ctl.conn.profile(cell)} onstop={() => ctl.interrupt()} />
         </div>
       {:else}
         <p class="empty">{run?.state === "running" || run?.state === "queued" ? "Running…" : `${cell} hasn't run. Ctrl+Enter runs it.`}</p>

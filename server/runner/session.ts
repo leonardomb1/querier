@@ -39,7 +39,7 @@ class Chan<T> implements AsyncIterable<T> {
 let nextId = 1;
 
 // The message that ends each kind of request.
-const FINAL = new Set(["ready", "done", "tables", "complete", "reset", "inspect", "renamed", "forgot", "exported", "checked", "filtered", "metrics"]);
+const FINAL = new Set(["ready", "done", "tables", "complete", "reset", "inspect", "renamed", "forgot", "exported", "checked", "filtered", "metrics", "profile"]);
 
 export class KernelSession implements Session {
   readonly id: string;
@@ -163,6 +163,19 @@ export class KernelSession implements Session {
       else if (msg.type === "filtered") {
         if (failed) throw new Error(failed);
         return { rows: msg.rows, of: msg.of, truncated: msg.truncated, columns: msg.columns, arrow: msg.arrow };
+      }
+    }
+    throw new Error(failed || "no answer");
+  }
+
+  /** Each column of a whole result, profiled (web/src/lib/profile.ts). */
+  async profile(name: string): Promise<{ rows: number; columns: Record<string, unknown> }> {
+    let failed = "";
+    for await (const msg of this.request("profile", { name })) {
+      if (msg.type === "error") failed = msg.message;
+      else if (msg.type === "profile") {
+        if (failed) throw new Error(failed);
+        return { rows: msg.rows, columns: msg.columns };
       }
     }
     throw new Error(failed || "no answer");

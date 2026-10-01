@@ -274,6 +274,7 @@
           cell={name}
           exportUrl="{nbUrl(ctl.name)}/cells/{encodeURIComponent(name)}/export"
           onsearch={(terms) => ctl.conn.filter(name, terms)}
+          onprofile={() => ctl.conn.profile(name)}
           onstop={() => ctl.interrupt()}
           sandbox={ctl.conn.info.sandbox ? { egress: ctl.conn.info.egress ?? "" } : null}
           onsandbox={() => ctl.openSettings("nb-sandbox")}

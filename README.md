@@ -80,7 +80,12 @@ Keys (press `?` in the UI for the full list):
 The sidebar lists the session's tables with their columns, the data files in
 the notebook folder, and basalt connections, whose tables it lists with
 `SHOW TABLES`. Clicking a name inserts it into the editor you last used.
-Result tables sort by clicking a header and show column stats on hover. Search
+Result tables sort by clicking a header. Each column has a profile: hovering its
+header shows a card (a histogram for numbers and dates, the most frequent values for
+text, how full it is, distinct, min, max, average, sum; clicked, it stays), and the
+toolbar's chart button shows every column's profile above its name, as Snowflake's
+tables do (remembered in the browser). For a result longer than the page holds, the
+kernel profiles all of it; the card says which rows it covers. Search
 takes `000600` (any column), `customer:000600` (one column), `state=BA` / `!=`,
 `total>1000` (and `>=`, `<`, `<=`; dates as `2025-01-31`), `-text` to leave rows out
 and `"a phrase"`, ANDed, with what matched highlighted. When a result is longer

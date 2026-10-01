@@ -6,16 +6,31 @@
   import { highlights, marked, rowMatches, type Term } from "../lib/search";
   import { zoom } from "../lib/zoom.svelte";
   import type { Kind } from "../lib/format";
+  import { profileOf, type ColumnProfile } from "../lib/profile";
+  import ColumnCard from "./ColumnCard.svelte";
+  import ColumnChart from "./ColumnChart.svelte";
   import Icon from "./Icon.svelte";
 
   let {
     table,
     terms = [],
+    profiles = false,
+    exact = null,
+    total,
+    onneedexact,
     onmatches,
   }: {
     table: Table;
     /** what rows to show: the search box's terms (lib/search.ts) */
     terms?: Term[];
+    /** each column's profile above its name (lib/profile.ts), as Snowflake's table shows it */
+    profiles?: boolean;
+    /** the columns' profiles over the whole result (the kernel's), when the page holds part of it */
+    exact?: Record<string, ColumnProfile> | null;
+    /** the rows of the whole result (more than the page holds, when it holds a preview) */
+    total?: number;
+    /** a profile is wanted: the whole result's, if there is more than the page holds */
+    onneedexact?: () => void;
     onmatches?: (n: number) => void;
   } = $props();
 
@@ -35,6 +50,8 @@
   // must match the rem heights in the styles below, at the current zoom
   const ROW = $derived(zoom.px(26));
   const HEIGHT = $derived(zoom.px(380));
+  // the header's height: taller with the columns' profiles in it (as in the styles below)
+  const HEAD = $derived(zoom.px(profiles ? 104 : 42));
 
   const cols = $derived(
     table.schema.fields.map((f) => {
@@ -43,7 +60,7 @@
       const kind = kindOf(f.type);
       let chars = Math.max(f.name.length + 2, typeLabel(f.type).length);
       for (let i = 0; i < Math.min(table.numRows, 200); i++) chars = Math.max(chars, (fmt(vec.get(i)) ?? "null").length);
-      return { field: f, name: f.name, type: typeLabel(f.type), kind, fmt, plain: plainText(f), vec, num: numeric(f), right: isNumeric(kind), width: zoom.px(Math.min(360, Math.max(56, chars * 7.6 + 22))) };
+      return { field: f, name: f.name, type: typeLabel(f.type), kind, fmt, plain: plainText(f), vec, num: numeric(f), right: isNumeric(kind), width: zoom.px(Math.min(360, Math.max(profiles ? 132 : 56, chars * 7.6 + 22))) };
     }),
   );
   const template = $derived(`${zoom.px(48)}px ${cols.map((c) => `${c.width}px`).join(" ")}`);
@@ -115,7 +132,7 @@
   function reveal(p: Pos) {
     if (!scroller) return;
     const top = p.r * ROW;
-    const head = zoom.px(42);
+    const head = HEAD;
     if (top < scroller.scrollTop) scroller.scrollTop = top;
     else if (top + ROW > scroller.scrollTop + scroller.clientHeight - head) scroller.scrollTop = top + ROW - scroller.clientHeight + head;
   }
@@ -145,7 +162,7 @@
       // near an edge, the table scrolls on under the pointer
       const box = scroller!.getBoundingClientRect();
       if (ev.clientY > box.bottom - ROW) scroller!.scrollTop += ROW;
-      else if (ev.clientY < box.top + zoom.px(42) + ROW / 2) scroller!.scrollTop -= ROW;
+      else if (ev.clientY < box.top + HEAD + ROW / 2) scroller!.scrollTop -= ROW;
       const q = hit(ev);
       if (!q) return;
       focus = dragRows ? { r: q.r, c: cols.length - 1 } : { r: q.r, c: q.c < 0 ? 0 : q.c };
@@ -265,83 +282,76 @@
     };
   });
 
-  // -- column stats, computed on first hover
-  const statsCache = new WeakMap<object, Stat[]>();
-  type Stat = [string, string];
+  // -- each column's profile (lib/profile.ts): the whole result's when the kernel has sent it,
+  // else the page's rows', worked out once per column
+  const local = new WeakMap<object, ColumnProfile>();
+  function profile(i: number): ColumnProfile {
+    const c = cols[i];
+    const whole = exact?.[c.name];
+    if (whole) return whole;
+    let p = local.get(c);
+    if (!p) local.set(c, (p = profileOf(c, table.numRows)));
+    return p;
+  }
+  const fmtN = new Intl.NumberFormat();
+  const whole = $derived(
+    exact || !total || total <= table.numRows
+      ? `all ${fmtN.format(total ?? table.numRows)} rows`
+      : `the first ${fmtN.format(table.numRows)} rows (all ${fmtN.format(total)} on the way)`,
+  );
+  $effect(() => {
+    if (profiles) onneedexact?.();
+  });
+
+  // -- the hover card: beside its column, not over it; clicked, it stays until Escape or a click elsewhere
+  const CARD = 15 * 16;
   let hovered = $state<number | null>(null);
-  let hoverX = $state(0);
+  let pinned = $state(false);
+  let cardX = $state(0);
   let hoverTimer: ReturnType<typeof setTimeout>;
 
-  function stats(i: number): Stat[] {
-    const c = cols[i];
-    const cached = statsCache.get(c);
-    if (cached) return cached;
-    const n = table.numRows;
-    let nulls = 0;
-    const counts = new Map<string, number>();
-    let min: any = null;
-    let max: any = null;
-    let sum = 0;
-    let numbers = 0;
-    for (let r = 0; r < n; r++) {
-      const v = c.vec.get(r);
-      if (v == null) {
-        nulls++;
-        continue;
-      }
-      const text = c.fmt(v) ?? "";
-      counts.set(text, (counts.get(text) ?? 0) + 1);
-      const x = c.right || isTemporal(c.kind) ? c.num(v) : null;
-      if (x != null) {
-        if (min == null || x < min[0]) min = [x, v];
-        if (max == null || x > max[0]) max = [x, v];
-        if (c.right) {
-          sum += x;
-          numbers++;
-        }
-      }
-    }
-    // one decimal, so 998 of 1,000 reads 99.8% rather than 100%
-    const pct = (k: number) => (n ? `${((k / n) * 100).toFixed(1).replace(/\.0$/, "")}%` : "0%");
-    const out: Stat[] = [
-      ["nulls", nulls ? `${nulls.toLocaleString()} (${pct(nulls)})` : "none"],
-      ["distinct", counts.size.toLocaleString()],
-    ];
-    if (min) out.push(["min", c.fmt(min[1]) ?? ""], ["max", c.fmt(max[1]) ?? ""]);
-    if (numbers) out.push(["mean", new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(sum / numbers)]);
-    if (!c.right && !isTemporal(c.kind) && counts.size < n) {
-      const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3);
-      for (const [v, k] of top) {
-        const flat = v.replace(/\s+/g, " ").trim();
-        const shown = !flat ? "(empty)" : `“${flat.length > 18 ? flat.slice(0, 17) + "…" : flat}”`;
-        out.push([shown, `${k.toLocaleString()} (${pct(k)})`]);
-      }
-    }
-    statsCache.set(c, out);
-    return out;
-  }
-
   function enter(i: number, e: PointerEvent) {
+    if (pinned) return;
     clearTimeout(hoverTimer);
-    const x = (e.currentTarget as HTMLElement).offsetLeft;
+    const th = e.currentTarget as HTMLElement;
     hoverTimer = setTimeout(() => {
+      if (!wrapEl) return;
+      const box = wrapEl.getBoundingClientRect();
+      const r = th.getBoundingClientRect();
+      const w = zoom.px(CARD);
+      const right = r.right - box.left + 6;
+      const left = r.left - box.left - w - 6;
+      cardX = right + w <= box.width ? right : left >= 0 ? left : Math.max(0, box.width - w);
       hovered = i;
-      hoverX = x;
+      onneedexact?.();
     }, 350);
   }
+  // leaving the header for the card keeps it: it goes a moment later, unless the pointer is on it
+  let hideTimer: ReturnType<typeof setTimeout>;
   function leave() {
     clearTimeout(hoverTimer);
+    clearTimeout(hideTimer);
+    if (!pinned) hideTimer = setTimeout(() => !pinned && (hovered = null), 200);
+  }
+  function unpin() {
+    pinned = false;
     hovered = null;
   }
 </script>
 
-<svelte:window onpointerdown={(e) => menu && !(e.target as HTMLElement).closest(".menu") && (menu = null)} />
+<svelte:window
+  onpointerdown={(e) => {
+    if (menu && !(e.target as HTMLElement).closest(".menu")) menu = null;
+    if (pinned && !(e.target as HTMLElement).closest(".card")) unpin();
+  }}
+  onkeydown={(e) => pinned && e.key === "Escape" && unpin()}
+/>
 
 <div class="wrap" bind:this={wrapEl}>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     class="scroll"
-    style:max-height="{HEIGHT + zoom.px(44)}px"
+    style:max-height="{HEIGHT + HEAD + zoom.px(2)}px"
     onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
     role="grid"
     aria-multiselectable="true"
@@ -350,7 +360,7 @@
     onkeydown={keydown}
     oncontextmenu={contextmenu}
   >
-    <div class="row head" style:grid-template-columns={template}>
+    <div class="row head" class:profiled={profiles} style:grid-template-columns={template}>
       <span class="idx">#</span>
       {#each cols as c, i}
         <button
@@ -366,6 +376,7 @@
             <b>{c.name}</b>{#if sort?.col === i}<em aria-hidden="true">{sort.dir === 1 ? "↑" : "↓"}</em>{/if}
           </span>
           <i><Icon name={KIND_ICON[c.kind]} size={11} />{c.type}</i>
+          {#if profiles}<span class="mini"><ColumnChart profile={profile(i)} /></span>{/if}
         </button>
       {/each}
     </div>
@@ -422,14 +433,17 @@
     </div>
   {/if}
   {#if hovered != null}
-    <div class="stats" transition:fade={{ duration: 120 }} style:left="{Math.max(0, hoverX)}px">
-      <div class="stats-title"><b>{cols[hovered].name}</b> <span>{cols[hovered].type}</span></div>
-      {#each stats(hovered) as [k, v]}
-        <div class="stat"><span>{k}</span><b>{v}</b></div>
-      {/each}
-      <div class="stats-hint">
-        {sort?.col === hovered ? `Sorted ${sort.dir === 1 ? "ascending" : "descending"} · click to ${sort.dir === 1 ? "reverse" : "clear"}` : "Click to sort"}
-      </div>
+    <div class="cardpos" style:left="{cardX}px" role="presentation" onpointerenter={() => clearTimeout(hideTimer)} onpointerleave={leave}>
+      <ColumnCard
+        name={cols[hovered].name}
+        type={cols[hovered].type}
+        icon={KIND_ICON[cols[hovered].kind]}
+        profile={profile(hovered)}
+        {whole}
+        {pinned}
+        onpin={() => (pinned = true)}
+        sortHint={sort?.col === hovered ? `Sorted ${sort.dir === 1 ? "ascending" : "descending"} · click the header to ${sort.dir === 1 ? "reverse" : "clear"}` : "Click the header to sort"}
+      />
     </div>
   {/if}
 </div>
@@ -462,6 +476,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-variant-numeric: tabular-nums;
+  }
+  /* with the profiles: the chart under each name, the names at the top */
+  .head.profiled {
+    height: 6.5rem;
+    align-items: stretch;
+  }
+  .head.profiled .th {
+    justify-content: flex-start;
+    gap: 0.125rem;
+    padding-top: 0.375rem;
+  }
+  .mini {
+    display: block;
+    width: 100%;
+    margin-top: 0.25rem;
+    text-align: left;
   }
   .head {
     position: sticky;
@@ -641,48 +671,9 @@
   .head .idx {
     z-index: 2;
   }
-  .stats {
+  .cardpos {
     position: absolute;
-    top: 2.875rem;
+    top: 0.25rem;
     z-index: 10;
-    min-width: 12.5rem;
-    max-width: 17.5rem;
-    background: var(--surface);
-    border: 1px solid var(--hair);
-    border-radius: 8px;
-    box-shadow: var(--shadow-lg);
-    padding: 0.5rem 0.625rem;
-    font-size: 0.75rem;
-    pointer-events: none;
-  }
-  .stats-title {
-    margin-bottom: 0.25rem;
-  }
-  .stats-title span {
-    color: var(--muted);
-  }
-  .stat {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    color: var(--ink-2);
-  }
-  .stat span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .stats-hint {
-    margin-top: 0.375rem;
-    padding-top: 0.375rem;
-    border-top: 1px solid var(--hair);
-    color: var(--muted);
-    font-size: 0.72rem;
-  }
-  .stat b {
-    font-weight: 600;
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   }
 </style>

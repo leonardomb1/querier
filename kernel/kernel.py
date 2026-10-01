@@ -241,6 +241,43 @@ def search_expr(df, terms):
     return pl.all_horizontal(exprs) if exprs else pl.lit(True)
 
 
+PROFILE_BINS = 10
+PROFILE_COLUMNS = 500
+
+
+def column_profile(s, dtype):
+    """One column's profile (web/src/lib/profile.ts): min and max as text, as the table shows them."""
+    n, nulls = s.len(), s.null_count()
+    p = {"rows": n, "nulls": nulls}
+    if dtype.is_nested():
+        return p
+    vals = s.drop_nulls()
+    p["distinct"] = vals.n_unique()
+    if not len(vals):
+        return p
+    numeric = dtype.is_numeric() and dtype != pl.Boolean
+    temporal = dtype.is_temporal()
+    if numeric or temporal:
+        x = vals.to_physical().cast(pl.Float64)
+        lo, hi = x.min(), x.max()
+        if hi > lo:
+            idx = ((x - lo) / (hi - lo) * PROFILE_BINS).floor().clip(0, PROFILE_BINS - 1).cast(pl.Int32)
+            counts = idx.value_counts()
+            hist = [0] * PROFILE_BINS
+            for i, k in zip(counts[idx.name].to_list(), counts["count"].to_list()):
+                hist[i] = k
+        else:
+            hist = [len(x)]
+        p["hist"] = hist
+        p["min"], p["max"] = str(vals.min()), str(vals.max())
+        if numeric:
+            p["mean"], p["sum"] = float(vals.mean()), float(vals.sum())
+    else:
+        top = vals.cast(pl.String).value_counts(sort=True).head(3)
+        p["top"] = [{"value": v, "count": k} for v, k in zip(top[top.columns[0]].to_list(), top["count"].to_list())]
+    return p
+
+
 def basalt_type(dtype):
     """A polars dtype as a type basalt's check takes (what a PARAM takes), or None."""
     if dtype == pl.Boolean:
@@ -734,6 +771,24 @@ class Kernel:
             buf.getvalue(),
         )
 
+    def profile(self, meta):
+        """Each column of a whole result, for the table's profile and hover card
+        (web/src/lib/profile.ts, the same shape): how full, how many distinct, and
+        by type a histogram with its range, mean and sum, or the most frequent values."""
+        name = meta["name"]
+        df = self.table(name)
+        if df is None:
+            self.emit({"type": "error", "message": f"`{name}` has no result in the kernel: run it first"})
+            self.emit({"type": "profile", "rows": 0, "columns": {}})
+            return
+        out = {}
+        for c, t in list(df.schema.items())[:PROFILE_COLUMNS]:
+            try:
+                out[c] = column_profile(df[c], t)
+            except Exception as e:  # a column it can't profile: left out, the others still come
+                out[c] = {"rows": df.height, "nulls": df[c].null_count(), "error": str(e)}
+        self.emit({"type": "profile", "rows": df.height, "columns": out})
+
     def check(self, meta):
         """Every problem in a SQL cell, without running it: against the session's
         connections, params and LETs, and the notebook's tables — typed for the
@@ -923,6 +978,8 @@ class Kernel:
                         self.check(meta)
                     elif op == "filter":
                         self.filter(meta)
+                    elif op == "profile":
+                        self.profile(meta)
                     elif op == "reset":
                         self.reset()
                     elif op == "inspect":
