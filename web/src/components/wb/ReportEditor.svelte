@@ -21,6 +21,8 @@
   import Variables from "../Variables.svelte";
   import VariablesDialog from "../VariablesDialog.svelte";
   import PublishDialog from "../PublishDialog.svelte";
+  import PanelDialog from "../PanelDialog.svelte";
+  import SidePanel from "../SidePanel.svelte";
   import { ago } from "../../lib/format";
 
   // The report, as its viewers see it: blocks on a 12-column grid, each a cell's
@@ -262,6 +264,7 @@
   }
 
   let publishing = $state(false);
+  let settingPanel = $state(false);
 
   const exportUrl = (cell: string) => `${nbUrl(name)}/cells/${encodeURIComponent(cell)}/export${ctl.reportMode ? "?report=1" : ""}`;
 
@@ -285,6 +288,9 @@
               : { icon: "layout", title: "Show report.svelte instead", run: () => setView("template") },
           ]
         : []),
+      ...(edits && !ctl.reportMode
+        ? [{ icon: "comment-discussion", title: report.panel ? "Side panel: change or remove…" : "Add a side panel: another site beside the report…", run: () => (settingPanel = true) }]
+        : []),
       // publishing it for its viewers: who may share the notebook
       ...(!ctl.reportMode && ctl.may("notebook.share") ? [{ icon: "cloud-upload", title: ctl.book?.published ? "Published: change or publish again…" : "Publish for viewers…", run: () => (publishing = true) }] : []),
       { icon: "screen-full", title: "Full screen  (Esc to leave)", run: toggleKiosk },
@@ -294,7 +300,8 @@
 
 <svelte:window {onkeydown} />
 
-<div class="report" class:kiosk bind:this={root}>
+<div class="frame" class:kiosk bind:this={root}>
+<div class="report">
 <div class="page">
   {#if ctl.book?.description}<p class="description">{ctl.book.description}</p>{/if}
 
@@ -504,7 +511,12 @@
   {/if}
 </div>
 </div>
+{#if report.panel}<SidePanel panel={report.panel} editor={ctl.mayEdit && !ctl.offline} />{/if}
+</div>
 
+{#if settingPanel}
+  <PanelDialog panel={report.panel} onchange={(p) => ctl.setReport((r) => (p ? (r.panel = p) : delete r.panel))} onclose={() => (settingPanel = false)} />
+{/if}
 {#if publishing}<PublishDialog {ctl} onclose={() => (publishing = false)} />{/if}
 {#if controlsOpen}
   <VariablesDialog
@@ -516,6 +528,11 @@
 {/if}
 
 <style>
+  /* the report, and its side panel's button kept at the corner while the report scrolls */
+  .frame {
+    position: relative;
+    height: 100%;
+  }
   .report {
     height: 100%;
     overflow: auto;

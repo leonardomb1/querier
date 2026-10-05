@@ -319,3 +319,22 @@ test("public links: off until an admin allows them; networks, passcode, expiry; 
   expect((await api("ana", "GET", "/workspaces/w/notebooks/r/published")).body.published.public).toBeNull();
   expect((await api("root", "GET", "/admin/audit?action=report.public")).body.entries.length).toBeGreaterThan(3);
 }, 120_000);
+
+test("a report's side panel: an http(s) site, shown while an admin allows its origin", async () => {
+  const set = (report: object) => api("ana", "PATCH", "/workspaces/w/notebooks/r", { report });
+  expect((await set({ panel: { url: "javascript:alert(1)" } })).status).toBe(400);
+  expect((await set({ panel: { url: "not an address" } })).status).toBe(400);
+  expect((await set({ panel: { url: "http://chat.example.com:8000/embed?key=k", title: "Chat" } })).status).toBe(200);
+
+  // the list: admins only, origins kept, Querier itself refused
+  expect((await api("ana", "PUT", "/admin/auth/embeds", { sites: ["http://chat.example.com:8000"] })).status).toBe(403);
+  expect((await api("root", "PUT", "/admin/auth/embeds", { sites: [`http://localhost:${PORT}`] })).status).toBe(400);
+  expect((await api("root", "PUT", "/admin/auth/embeds", { sites: ["ftp://x.example.com"] })).status).toBe(400);
+  const saved = await api("root", "PUT", "/admin/auth/embeds", { sites: ["http://chat.example.com:8000/embed", "http://chat.example.com:8000"] });
+  expect(saved.body).toEqual(["http://chat.example.com:8000"]);
+  // what the pages read it from
+  expect((await api("ana", "GET", "/me")).body.embedSites).toEqual(["http://chat.example.com:8000"]);
+  expect((await api("root", "GET", "/admin/auth")).body.embedSites).toEqual(["http://chat.example.com:8000"]);
+  expect((await api("root", "PUT", "/admin/auth/embeds", { sites: [] })).body).toEqual([]);
+  expect((await api("ana", "GET", "/me")).body.embedSites).toEqual([]);
+});

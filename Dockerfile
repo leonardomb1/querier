@@ -2,7 +2,7 @@
 #   docker build -t querier .
 #   docker compose up        (see compose.yaml for the devices and capabilities it needs)
 
-ARG BASALT_VERSION=v0.8.11
+ARG BASALT_VERSION=v0.8.17
 ARG FIRECRACKER_VERSION=v1.17.0
 ARG GUEST_KERNEL=firecracker-ci/v1.15/x86_64/vmlinux-6.1.155
 

@@ -275,6 +275,8 @@ export interface Report {
   variables?: Record<string, VarSpec>;
   /** Shown as its blocks or as report.svelte (default: the template when there is one). */
   view?: "blocks" | "template";
+  /** Another site beside the report, opened from a button at its corner (while an admin allows its origin). */
+  panel?: { url: string; title?: string };
 }
 
 export type CellChange = "added" | "modified" | "deleted" | "moved";
@@ -476,6 +478,8 @@ export interface AuthSettings {
   admission: { when: string | null; custom?: boolean };
   /** public links to reports: allowed at all, and the networks every link must stay within */
   publicLinks: { enabled: boolean; networks?: string[] };
+  /** origins reports' side panels may show */
+  embedSites: string[];
 }
 export interface ProviderTest {
   steps: { ok: boolean; what: string; detail?: string; ms?: number }[];
@@ -539,7 +543,7 @@ export const api = {
     login: (provider: string, username: string, password: string) => call<{ me: Me }>("POST", "/auth/login", { provider, username, password }),
     logout: () => call("POST", "/auth/logout", {}),
     /** who is signed in, and what they may do outside any workspace */
-    me: () => call<{ me: Me; permissions: Action[]; sessionExpires: number; password?: SysadminPassword }>("GET", "/me"),
+    me: () => call<{ me: Me; permissions: Action[]; sessionExpires: number; embedSites?: string[]; password?: SysadminPassword }>("GET", "/me"),
     /** the sysadmin's new password (Querier's own account): `current` isn't asked while it is the generated one */
     changePassword: (current: string, password: string) => call<{ password: SysadminPassword }>("POST", "/me/password", { current, password }),
   },
@@ -655,6 +659,7 @@ export const api = {
       session: (s: AuthSettings["session"]) => call<AuthSettings["session"]>("PUT", "/admin/auth/session", s),
       admission: (when: string | null) => call<AuthSettings["admission"]>("PUT", "/admin/auth/admission", { when }),
       publicLinks: (o: { enabled: boolean; networks: string[] }) => call<AuthSettings["publicLinks"]>("PUT", "/admin/auth/public", o),
+      embeds: (sites: string[]) => call<string[]>("PUT", "/admin/auth/embeds", { sites }),
       /** a certificate read on the server (PEM text, or a DER file's bytes in base64): checked, and what it is */
       certificate: (given: { pem: string } | { der: string }) => call<{ pem: string; certs: CertificateInfo[] }>("POST", "/admin/auth/certificate", given),
     },

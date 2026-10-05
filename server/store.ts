@@ -382,6 +382,27 @@ export interface Report {
   view?: "blocks" | "template";
   /** How each PARAM shows: a text box (default), a dropdown, or the time picker. */
   variables?: Record<string, VarSpec>;
+  /** Another site beside the report (a chat, a form): a button at its corner opens it in a panel. It
+   *  shows only while an administrator allows its origin (auth config `embedSites`). */
+  panel?: ReportPanel;
+}
+
+export interface ReportPanel {
+  url: string;
+  /** the panel's heading and the button's tooltip */
+  title?: string;
+}
+
+/** A side panel's address, checked: http(s), and its origin (what an administrator allows). */
+export function panelOrigin(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new UserError(`report.panel.url: \`${url}\` isn't an address.`);
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") throw new UserError("report.panel.url: an http or https address.");
+  return u.origin;
 }
 
 /** workspace.json */
@@ -500,6 +521,13 @@ function checkReport(raw: any): Report {
   if (raw.refresh != null) {
     if (!INTERVALS.includes(raw.refresh)) throw new UserError(`report.refresh is one of ${INTERVALS.join(", ")}.`);
     out.refresh = raw.refresh;
+  }
+  if (raw.panel != null) {
+    const url = String(raw.panel.url ?? "").trim();
+    if (url.length > 2000) throw new UserError("report.panel.url: up to 2,000 characters.");
+    panelOrigin(url);
+    const title = typeof raw.panel.title === "string" ? raw.panel.title.trim().slice(0, 60) : "";
+    out.panel = { url, ...(title ? { title } : {}) };
   }
   if (raw.variables != null) {
     out.variables = {};

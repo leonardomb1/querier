@@ -244,7 +244,7 @@ export class NotebookCtl {
 
   /** Destinations the cells name, as host:port: what the sandbox settings suggest allowing. */
   sandboxRefs = $derived.by(() => {
-    const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432, mysql: 3306, starrocks: 9030 };
+    const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432, mysql: 3306, starrocks: 9030, doris: 9030, sftp: 22 };
     const out = new Map<string, string>();
     for (const c of this.book?.cells ?? []) {
       const src = this.sources[c.name] ?? c.source;
@@ -260,6 +260,8 @@ export class NotebookCtl {
         }
       }
       for (const m of src.matchAll(/'(https?):\/\/([^/:']+)(?::(\d+))?[^']*'/g)) out.set(`${m[2]}:${m[3] ?? (m[1] === "https" ? 443 : 80)}`, `a URL in ${c.name}`);
+      // sftp://user@host[:port]/path (without a user, sftp://name/… is a connection's)
+      for (const m of src.matchAll(/'sftp:\/\/[^@/']+@([^/:']+)(?::(\d+))?[^']*'/g)) out.set(`${m[1]}:${m[2] ?? 22}`, `a URL in ${c.name}`);
     }
     return out;
   });

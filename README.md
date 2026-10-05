@@ -230,6 +230,15 @@ which a policy can narrow).
   public links off, or publishing it to run as each viewer ends it too. Making,
   changing and ending links are in the audit log.
 
+**Side panel** (the report's toolbar): another site beside the report, such as a
+chat or a form, opened from a button at its corner, in the blocks layout and the
+template alike, and on public links. It is framed by the report's page, outside
+the template's sandbox, so the site keeps its own origin, cookies and sign-in;
+hence it shows only for sites an administrator lists (Administration → Sign-in →
+Sites reports may show), and the site must allow Querier's address in its
+`Content-Security-Policy: frame-ancestors`. Published reports show the panel they
+were published with. `set_report` sets it for AI clients (`panel`).
+
 **Git**: each notebook can be its own repository; opening an untracked notebook
 offers to start. The sidebar's Changes tab shows what changed per cell (a
 renumbered cell is "moved", not deleted and added), commits, discards, switches

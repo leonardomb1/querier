@@ -642,6 +642,8 @@ parts picks what of the output shows (${PARTS.join(", ")}; default all: charts a
 the same cell may appear in several blocks (its chart here, its table there). null for blocks returns to the default layout
 (markdown and the cells nothing reads). \`refresh\` re-runs the report while open (30s, 1m, 5m, 15m, 1h; null for off).
 \`variables\` sets how a PARAM shows: { control: text | select | time, source?: { cell, column? } | { values: [..] } }; null for the default.
+\`panel\` puts another site beside the report, blocks or template (a chat, a form): { url, title? }; a button at the report's corner opens it.
+It shows only while an administrator allows the site's origin (Administration → Sign-in → Embedded sites); null removes it.
 Omitted fields stay as they are; read_notebook shows the current layout.`,
     },
     {
@@ -662,8 +664,9 @@ Omitted fields stay as they are; read_notebook shows the current layout.`,
         .optional(),
       refresh: z.enum(["30s", "1m", "5m", "15m", "1h"]).nullable().optional(),
       variables: z.record(z.string(), z.any().nullable()).optional(),
+      panel: z.object({ url: z.string(), title: z.string().optional() }).nullable().optional(),
     },
-    async ({ notebook, blocks, refresh, variables }) => {
+    async ({ notebook, blocks, refresh, variables, panel }) => {
       await open(notebook, "edit", "set_report");
       const book = await store.load(notebook);
       const names = new Set(book.cells.map((c) => c.name));
@@ -681,6 +684,7 @@ Omitted fields stay as they are; read_notebook shows the current layout.`,
         r.variables = { ...(r.variables ?? {}) };
         for (const [k, v] of Object.entries(variables)) if (v == null) delete r.variables[k]; else r.variables[k] = v;
       }
+      if (panel !== undefined) (panel ? (r.panel = panel) : delete r.panel);
       await store.settings(notebook, { report: r });
       ctx.changed(notebook);
       return text(`Saved the report of \`${notebook}\`.`);

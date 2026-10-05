@@ -8,8 +8,19 @@ class Session {
   permissions = $state<Action[]>([]);
   /** the sysadmin's: changeable here, and still the generated one (the first sign-in asks for a new one) */
   password = $state<SysadminPassword | null>(null);
+  /** origins a report's side panel may show (an administrator's list; a public link's page sets it too) */
+  embedSites = $state<string[]>([]);
   /** the change-password dialog is open */
   changingPassword = $state(false);
+
+  /** May a report's side panel show this address? */
+  embeddable(url: string): boolean {
+    try {
+      return this.embedSites.includes(new URL(url).origin);
+    } catch {
+      return false;
+    }
+  }
 
   /** May they do `action` outside any workspace? */
   can(action: Action): boolean {
@@ -22,6 +33,7 @@ class Session {
       this.me = r.me;
       this.permissions = r.permissions;
       this.password = r.password ?? null;
+      this.embedSites = r.embedSites ?? [];
       if (this.password?.mustChange) this.changingPassword = true;
       return true;
     } catch {

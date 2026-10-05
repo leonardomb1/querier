@@ -3,6 +3,7 @@
   import type { Notebook } from "../lib/api";
   import { ago } from "../lib/format";
   import { NotebookCtl } from "../lib/notebook.svelte";
+  import { session } from "../lib/session.svelte";
   import { TemplateCtl } from "../lib/template.svelte";
   import { Workbench } from "../lib/workbench.svelte";
   import Icon from "./Icon.svelte";
@@ -40,7 +41,8 @@
     if (!r) return fail("The server can't be reached.");
     if (r.status === 401) return void (phase = "passcode");
     if (!r.ok) return fail(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "This report can't be shown.");
-    const book = (await r.json()) as Notebook & { published: { public?: { refresh: number } } };
+    const book = (await r.json()) as Notebook & { published: { public?: { refresh: number } }; embedSites?: string[] };
+    session.embedSites = book.embedSites ?? [];
     refresh = book.published?.public?.refresh ?? 15;
     ctl?.close();
     ctl = new NotebookCtl(book.name, book, true, true);

@@ -91,6 +91,9 @@ export interface AuthConfig {
   /** public links to reports (reports.ts): off unless an administrator turns them on; `networks`, when
    *  set, is where every link may be opened from at most (a link can narrow it, never widen it) */
   publicLinks?: { enabled: boolean; networks?: string[] };
+  /** sites a report's side panel may show (their origins, e.g. https://chat.example.com): none unless an
+   *  administrator lists them, since the panel frames them unsandboxed, with their own cookies */
+  embedSites?: string[];
 }
 
 const DEFAULTS: AuthConfig = { providers: [], session: { absoluteHours: 12, idleMinutes: 120, refreshMinutes: 15 }, publicLinks: { enabled: false } };
@@ -101,7 +104,12 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
   const f = Bun.file(authFile());
   if (!(await f.exists())) return structuredClone(DEFAULTS);
   const raw = (await f.json()) as Partial<AuthConfig>;
-  return { providers: raw.providers ?? [], session: { ...DEFAULTS.session, ...(raw.session ?? {}) }, publicLinks: { enabled: !!raw.publicLinks?.enabled, ...(raw.publicLinks?.networks?.length ? { networks: raw.publicLinks.networks } : {}) } };
+  return {
+    providers: raw.providers ?? [],
+    session: { ...DEFAULTS.session, ...(raw.session ?? {}) },
+    publicLinks: { enabled: !!raw.publicLinks?.enabled, ...(raw.publicLinks?.networks?.length ? { networks: raw.publicLinks.networks } : {}) },
+    ...(raw.embedSites?.length ? { embedSites: raw.embedSites } : {}),
+  };
 }
 
 export async function saveAuthConfig(c: AuthConfig) {

@@ -18,7 +18,7 @@ import { Access } from "./mcp/access";
 import { buildTemplate, templateVersion, type TemplatePackages } from "./template";
 import { mcpServer, type Ctx } from "./mcp/server";
 import { Connections, type Connection } from "./connections";
-import { checkAttributes, DEFAULT_WORKSPACE, NotFound, Store, UserError } from "./store";
+import { checkAttributes, DEFAULT_WORKSPACE, NotFound, panelOrigin, Store, UserError } from "./store";
 import { Auth, LoginFailed, OIDC_COOKIE, type Session } from "./auth";
 import { Authz, policiesDir } from "./auth/authz";
 import { Grants, NotebookAttributes } from "./auth/grants";
@@ -906,7 +906,13 @@ const server = Bun.serve<Client["data"], any>({
       GET: async (req) => {
         const s = await auth.authenticate(req);
         if (!s) return Response.json({ error: "Not signed in.", login: true }, { status: 401 });
-        return Response.json({ me: publicPrincipal(s.principal), permissions: authz.allowed(s.principal, authz.tenant()), sessionExpires: s.expires, ...sysadminAccount(s.principal) });
+        return Response.json({
+          me: publicPrincipal(s.principal),
+          permissions: authz.allowed(s.principal, authz.tenant()),
+          sessionExpires: s.expires,
+          embedSites: auth.config.embedSites ?? [],
+          ...sysadminAccount(s.principal),
+        });
       },
     },
     // the sysadmin's own password (Querier's account; one from .env changes there)
@@ -1664,6 +1670,7 @@ const server = Bun.serve<Client["data"], any>({
         // where its account lives: Querier's own (sysadmin.json, changed from the account menu), or .env's
         sysadminSource: auth.sysadmin.source,
         publicLinks: auth.config.publicLinks ?? { enabled: false },
+        embedSites: auth.config.embedSites ?? [],
         admission: await admission(),
       })),
     },
@@ -1683,6 +1690,21 @@ const server = Bun.serve<Client["data"], any>({
         await auth.saveConfig({ ...auth.config, publicLinks });
         auth.audit.log({ actor: r.session.principal.id, action: "auth.publicLinks", resource: "Tenant:querier", decision: "ok", detail: publicLinks });
         return publicLinks;
+      }),
+    },
+    // the sites reports' side panels may show (their origins)
+    "/api/admin/auth/embeds": {
+      PUT: api({ on: "tenant", action: "admin.manage" }, async (r, b) => {
+        const sites = new Set<string>();
+        for (const x of Array.isArray(b.sites) ? b.sites.map(String).map((x: string) => x.trim()).filter(Boolean) : []) {
+          const origin = panelOrigin(x);
+          if (origin === new URL(publicUrl || r.url).origin) throw new UserError(`${origin} is Querier itself.`);
+          sites.add(origin);
+        }
+        const embedSites = [...sites];
+        await auth.saveConfig({ ...auth.config, embedSites: embedSites.length ? embedSites : undefined });
+        auth.audit.log({ actor: r.session.principal.id, action: "auth.embedSites", resource: "Tenant:querier", decision: "ok", detail: { embedSites } });
+        return embedSites;
       }),
     },
     // who may sign in: a condition over their groups and attributes (null: everyone the directories accept)
@@ -1935,6 +1957,7 @@ const server = Bun.serve<Client["data"], any>({
             files: [],
             permissions: [],
             published: { at: p.publishedAt, runAs: "owner", public: { refresh: p.public.refresh } },
+            embedSites: auth.config.embedSites ?? [],
           },
           { headers: { "Cache-Control": "no-store" } },
         );

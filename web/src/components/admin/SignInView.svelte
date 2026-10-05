@@ -9,6 +9,7 @@
   import CodeEditorPanel from "../ui/CodeEditorPanel.svelte";
   import CodeInput from "../ui/CodeInput.svelte";
   import { adminHref } from "../../lib/href";
+  import { session as signedIn } from "../../lib/session.svelte";
   import type { CedarVocabulary } from "../../lib/cedarcomplete";
 
   // How people sign in: the directories (LDAP, Active Directory) and OpenID
@@ -152,6 +153,26 @@
       publicError = err.message;
     }
   }
+  // -- sites a report's side panel may show: framed unsandboxed, so only those listed here
+  let embedSites = $state("");
+  let embedError = $state("");
+  let embedSaved = $state(false);
+  $effect(() => {
+    if (s) embedSites = (s.embedSites ?? []).join("\n");
+  });
+  async function saveEmbeds(e: SubmitEvent) {
+    e.preventDefault();
+    embedError = "";
+    try {
+      const saved = await api.admin.auth.embeds(embedSites.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean));
+      if (s) s.embedSites = saved;
+      signedIn.embedSites = saved;
+      embedSaved = true;
+      setTimeout(() => (embedSaved = false), 2000);
+    } catch (err: any) {
+      embedError = err.message;
+    }
+  }
   // -- who may sign in: a condition, written as the managed policy sign-in.cedar
   let admitting = $state(false);
   let vocabulary = $state<CedarVocabulary | null>(null);
@@ -282,6 +303,20 @@
       <button class="primary" type="submit">{publicSaved ? "Saved" : "Save"}</button>
     </form>
     {#if publicError}<p class="error">{publicError}</p>{/if}
+
+    <h3>Sites reports may show</h3>
+    <form class="public" onsubmit={saveEmbeds}>
+      <p class="muted">
+        A report can open another site beside it, such as a chat or a form, from a button at its corner, on public links too.
+        <InfoTip text="The site runs as itself, with its own cookies and sign-in, outside the report's sandbox: list only sites you trust. A report's panel for a site not listed here shows nothing. The site has to allow being framed by Querier's address (its Content-Security-Policy frame-ancestors)." />
+      </p>
+      <label>
+        <span>One address per line <span class="muted">(only its origin counts)</span></span>
+        <textarea class="text mono" rows="3" bind:value={embedSites} placeholder="https://chat.example.com" spellcheck="false"></textarea>
+      </label>
+      <button class="primary" type="submit">{embedSaved ? "Saved" : "Save"}</button>
+    </form>
+    {#if embedError}<p class="error">{embedError}</p>{/if}
   {:else if !error}
     <p class="muted">Loading…</p>
   {/if}
@@ -334,6 +369,20 @@
   .public .mono {
     font-family: var(--mono);
     font-size: 0.78rem;
+  }
+  .public textarea {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 0.375rem 0.5rem;
+    color: var(--wb-fg);
+    background: var(--wb-input);
+    border: 1px solid var(--wb-input-border);
+    border-radius: 4px;
+    resize: vertical;
+  }
+  .public textarea:focus {
+    outline: none;
+    border-color: var(--wb-accent);
   }
   .public .check {
     display: inline-flex;
